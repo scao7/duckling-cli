@@ -26,21 +26,62 @@ duckling solves exactly this. **It does not replace your terminal.** SSH is stil
 
 ## Quick start
 
-One line, three things — install, pair via TG, start the daemon:
+There are two ways to use duckling. **Pick one.**
+
+### Path A — Use the shared bot 🦆 (recommended)
+
+You pair with our hosted bot ([@DucklingCli_Bot](https://t.me/DucklingCli_Bot)) and our Cloudflare Worker. **Zero infra setup on your side.**
 
 ```bash
 npm i -g duckling-cli && duckling setup && duckling start
 ```
 
-Step-by-step:
+What happens:
+1. `npm i -g duckling-cli` installs the CLI globally.
+2. `duckling setup` prints a QR + a `https://t.me/DucklingCli_Bot?start=…` link. Scan/click → tap **Start** in Telegram → paired. Config writes to `~/.config/duckling/config.json`.
+3. `duckling start` brings up the daemon, which connects to our shared relay.
+
+You did **not** need a Cloudflare account, a Telegram bot, or any deploy step. Inference still runs on your own Claude OAuth locally — the relay only forwards control events, not model traffic.
+
+### Path B — Run your own bot + Worker
+
+If you'd rather not depend on the shared relay (private team bot, paranoid about an intermediary, etc.), you self-host. The CLI is identical; only the maintainer (you) does an extra one-time Cloudflare deploy.
+
+**Maintainer, once:**
 
 ```bash
-npm install -g duckling-cli
-duckling setup       # → open the QR / link, tap Start in Telegram → paired
-duckling start       # → daemon connects to the relay
+git clone https://github.com/scao7/duckling-cli.git
+cd duckling-cli
+npm install
+# Follow DEPLOY.md — 5 wrangler commands:
+#   wrangler login
+#   wrangler secret put TELEGRAM_BOT_TOKEN     # from BotFather
+#   wrangler secret put TG_WEBHOOK_SECRET      # random string
+#   wrangler deploy                            # prints your relay URL
+#   curl … setWebhook                          # point Telegram at the worker
 ```
 
-Then chat with [@DucklingCli_Bot](https://t.me/DucklingCli_Bot) on Telegram:
+**Each user (anyone pointed at your fork), once:**
+
+```bash
+npm i -g duckling-cli
+export DUCKLING_RELAY_URL=https://your-relay.your-subdomain.workers.dev
+duckling setup
+duckling start
+```
+
+`DUCKLING_RELAY_URL` redirects pairing + the daemon's WebSocket to your Worker instead of ours. After pairing, the URL is baked into `~/.config/duckling/config.json` — no need to keep exporting it.
+
+Full recipe + cost calculator (spoiler: **$0** on Cloudflare's free tier for small teams) in **[DEPLOY.md](DEPLOY.md)**.
+
+### Both paths require
+
+- **Node 18.17+**
+- **A working `claude` install, logged in.** The Agent SDK uses your existing Claude OAuth — no separate API key, no extra cost. If `claude --version` works on your machine, you're set.
+
+### After setup — talk to the bot
+
+Then chat with [@DucklingCli_Bot](https://t.me/DucklingCli_Bot) (Path A) or your own bot (Path B) on Telegram:
 
 ```
 You:   /new write a quicksort in src/quicksort.ts
@@ -56,8 +97,6 @@ Bot:   Sessions:
        🟢 quicksort · mOw0F3xO ◀
        …
 ```
-
-Prerequisites: Node 18.17+ and a working `claude` install with a Claude account (the SDK uses your existing Claude Code OAuth — **no separate API key, no extra cost**).
 
 ## What you can do
 
