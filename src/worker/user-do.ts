@@ -434,35 +434,52 @@ export class UserDO implements DurableObject {
        *  the user long-press-replying to our /new prompt. */
       replyToMessageId?: number;
     };
-    // If the user long-pressed our /new prompt and replied with a task,
-    // route it as new_session instead of chat. Match by message_id so
-    // replies to other bot messages don't accidentally start sessions.
+    // If a /new prompt is outstanding, two paths:
+    //   (a) user long-press-replied to the prompt → consume as task
+    //   (b) user typed a regular message → remind them how to reply right,
+    //       then clear pendingNewMsgId so subsequent text routes normally
     const pendingNewMsgId = await this.storage.get<number>('pendingNewMsgId');
-    if (
-      pendingNewMsgId &&
-      body.replyToMessageId &&
-      body.replyToMessageId === pendingNewMsgId &&
-      body.text.trim().length > 0
-    ) {
-      await this.storage.delete('pendingNewMsgId');
-      const newMsg: RelayToDaemon = {
-        type: 'new_session',
-        prompt: body.text.trim(),
-        fromUsername: body.fromUsername,
-      };
-      const delivered = this.broadcastToDaemons(newMsg);
-      if (delivered === 0) {
-        try {
-          await this.tg.sendMessage(
-            body.chatId,
-            `<i>📭 没有在线的 daemon —— 在某台机器上跑 <code>duckling start</code>。</i>`,
-            { parseMode: 'HTML', silent: true },
-          );
-        } catch {
-          // Best-effort; not fatal.
+    if (pendingNewMsgId) {
+      const repliedToPrompt =
+        body.replyToMessageId === pendingNewMsgId && body.text.trim().length > 0;
+      if (repliedToPrompt) {
+        await this.storage.delete('pendingNewMsgId');
+        const newMsg: RelayToDaemon = {
+          type: 'new_session',
+          prompt: body.text.trim(),
+          fromUsername: body.fromUsername,
+        };
+        const delivered = this.broadcastToDaemons(newMsg);
+        if (delivered === 0) {
+          try {
+            await this.tg.sendMessage(
+              body.chatId,
+              `<i>📭 没有在线的 daemon —— 在某台机器上跑 <code>duckling start</code>。</i>`,
+              { parseMode: 'HTML', silent: true },
+            );
+          } catch {
+            // Best-effort; not fatal.
+          }
         }
+        return json(200, { ok: true, kind: 'new_session_from_reply', delivered });
       }
-      return json(200, { ok: true, kind: 'new_session_from_reply', delivered });
+      // (b) wrong-reply path — explain once and clear, so we don't nag
+      // forever. The user's text doesn't fall through to chat to avoid a
+      // double "no live session" reply.
+      await this.storage.delete('pendingNewMsgId');
+      try {
+        await this.tg.sendMessage(
+          body.chatId,
+          `这条不是回复 /new 提示哦 🦆\n` +
+            `想派活,两种做法,任选其一:\n` +
+            `  · <b>长按</b>上面那条 "你好,长按回复…" → 选 <b>回复</b> → 输入任务\n` +
+            `  · 或者直接发:<code>/new 你的任务</code>(一条搞定)`,
+          { parseMode: 'HTML', silent: true },
+        );
+      } catch {
+        // Best-effort.
+      }
+      return json(200, { ok: true, kind: 'new_prompt_missed' });
     }
     // If there's a pending multi-question, treat this reply as the answer.
     const pendingShort = await this.storage.get<string>('pendingQ');
