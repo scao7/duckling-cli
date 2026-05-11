@@ -75,9 +75,9 @@ export type DaemonToRelay =
       text: string;
     }
   | {
-      // Claude is invoking a tool. Only forwarded when /verbose is on, OR
-      // when the tool is TodoWrite (always — used for plan messages) or
-      // AskUserQuestion (always — needs TG buttons).
+      // Claude is invoking a tool. The worker side ignores this for ordinary
+      // tools (we never show mid-task progress); TodoWrite and
+      // AskUserQuestion get dedicated event types below.
       type: 'tool_use';
       sessionId: string;
       tool: string;
@@ -125,13 +125,6 @@ export type DaemonToRelay =
       type: 'sessions_snapshot';
       sessions: SessionSummary[];
       currentId?: string;
-    }
-  | {
-      // Bookkeeping: cost accumulated today, etc. Sent on /stats request.
-      type: 'stats';
-      totalCostUsdToday: number;
-      sessionsLaunchedToday: number;
-      runningCount: number;
     }
   | {
       // Session was forgotten (after /forget). Worker should delete its
@@ -217,20 +210,6 @@ export type RelayToDaemon =
   | {
       // /sessions — daemon will reply with a `sessions_snapshot` event.
       type: 'list_sessions';
-    }
-  | {
-      // /stats — daemon replies with a `stats` event.
-      type: 'get_stats';
-    }
-  | {
-      // /verbose on|off — toggle whether routine tool_use events get forwarded.
-      type: 'set_verbose';
-      verbose: boolean;
-    }
-  | {
-      // /model sonnet|opus|haiku — set default model for new sessions.
-      type: 'set_model';
-      model: string;
     }
   | { type: 'ping'; id: string }
   | { type: 'error'; message: string; fatal?: boolean };

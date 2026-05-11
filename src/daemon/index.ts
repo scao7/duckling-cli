@@ -62,13 +62,25 @@ export async function runDaemon(): Promise<void> {
       broadcastSnapshot();
     },
     onComplete: (s, _finalText) => {
-      // A successful `result` from the SDK marks the end of a TURN, not the
-      // session — claude is just waiting for the next user message. Don't
-      // surface a "✅ done" footer for every reply; only true terminations
-      // (kill / fail) emit session_done. Stats roll up via /stats.
+      // Each successful `result` marks the end of a turn. We only push a
+      // summary footer when the turn actually did work — invoked a tool,
+      // produced a plan, or asked a question. Pure conversational replies
+      // (Claude says "OK" with no side effect) get NO footer so the chat
+      // stays quiet for chit-chat.
+      if (s.currentTurnDidWork) {
+        relay.send({
+          type: 'session_done',
+          sessionId: s.id,
+          status: 'completed',
+          costUsd: s.costUsd,
+          durationMs: Date.now() - s.startedAt,
+          numTurns: s.numTurns,
+        });
+      }
       broadcastSnapshot();
-      // Still log the cost so the daemon log shows per-turn accounting.
-      log.info(`session ${s.id} turn ended (cost=$${s.costUsd.toFixed(4)}, turns=${s.numTurns})`);
+      log.info(
+        `session ${s.id} task ended (cost=$${s.costUsd.toFixed(4)}, turns=${s.numTurns}, didWork=${s.currentTurnDidWork})`,
+      );
     },
     onFailed: (s, error) => {
       relay.send({
@@ -212,17 +224,6 @@ export async function runDaemon(): Promise<void> {
       }
       case 'list_sessions':
         broadcastSnapshot();
-        return;
-      case 'get_stats':
-        relay.send({ type: 'stats', ...manager.stats() });
-        return;
-      case 'set_verbose':
-        manager.verbose = msg.verbose;
-        log.info(`verbose = ${manager.verbose}`);
-        return;
-      case 'set_model':
-        manager.defaultModel = msg.model;
-        log.info(`default model = ${msg.model}`);
         return;
       case 'ping':
         relay.send({ type: 'pong', id: msg.id });

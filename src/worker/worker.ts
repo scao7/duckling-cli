@@ -78,18 +78,9 @@ async function route(request: Request, env: Env): Promise<Response> {
 // ---------- /healthz ----------
 
 const BOT_COMMANDS: { command: string; description: string }[] = [
-  { command: 'new', description: '开新会话 · /new <prompt>' },
-  { command: 'sessions', description: '查看会话列表' },
-  { command: 'switch', description: '切到某会话 · /switch <id|name>' },
-  { command: 'resume', description: '继续会话 · /resume <id|name>' },
-  { command: 'fork', description: '分叉会话 · /fork <id|name>' },
-  { command: 'kill', description: '结束会话 · /kill <id|name>' },
-  { command: 'forget', description: '完全删除会话+历史 · /forget <id|name>' },
-  { command: 'stop', description: '中断当前会话的本轮生成' },
-  { command: 'stats', description: '今日用量与花费' },
-  { command: 'model', description: '设默认模型 · /model sonnet|opus|haiku' },
-  { command: 'verbose', description: '路由 tool_use 事件 · /verbose on|off' },
-  { command: 'help', description: '命令速查' },
+  { command: 'new', description: '派活 · /new <任务>' },
+  { command: 'kill', description: '叫停 · /kill (或带名字)' },
+  { command: 'help', description: '速查' },
 ];
 // Hash of the commands list — used to re-push when the catalog changes.
 const BOT_COMMANDS_HASH = JSON.stringify(BOT_COMMANDS);
@@ -285,24 +276,10 @@ async function handleHelpCommand(update: TgUpdate, tg: TgApi): Promise<void> {
   try {
     await tg.sendMessage(
       chatId,
-      `🦆 <b>duckling</b> — 在 Telegram 上跑 Claude Code\n\n` +
-        `<b>常用：</b>\n` +
-        `  · 直接发消息 → 当前会话继续聊\n` +
-        `  · <code>/new 帮我写个 quicksort</code> → 开新会话\n` +
-        `  · <code>/sessions</code> → 看看有哪些会话\n` +
-        `  · <code>/stop</code> → 打断当前生成（会话不关）\n\n` +
-        `<b>会话管理：</b>\n` +
-        `  <code>/new &lt;prompt&gt;</code> — 新开会话\n` +
-        `  <code>/switch &lt;id|name&gt;</code> — 切到指定会话（或点会话头上的"▶"按钮）\n` +
-        `  <code>/resume &lt;id|name&gt;</code> — 继续旧会话\n` +
-        `  <code>/fork &lt;id|name&gt;</code> — 从某会话分叉一条新支线\n` +
-        `  <code>/kill &lt;id|name&gt;</code> — 结束某会话（历史保留，可 /resume）\n` +
-        `  <code>/forget &lt;id|name&gt;</code> — 完全删掉某会话+jsonl 历史，不可恢复\n\n` +
-        `<b>设置：</b>\n` +
-        `  <code>/model sonnet|opus|haiku</code> — 默认模型\n` +
-        `  <code>/verbose on|off</code> — 是否转发常规 tool_use 事件\n` +
-        `  <code>/stats</code> — 今日用量\n\n` +
-        `<b>问题回答：</b>Claude 弹出选项时直接点按钮；如果是多个问题，按 <code>答1 | 答2</code> 的格式回复。`,
+      `🦆 <b>duckling</b>\n` +
+        `<code>/new &lt;任务&gt;</code> — 派活给员工\n` +
+        `<code>/kill</code> — 叫停（带名字或按按钮选）\n` +
+        `直接发消息 — 接着当前任务聊`,
       { parseMode: 'HTML', silent: true },
     );
   } catch (e) {

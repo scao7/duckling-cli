@@ -1,6 +1,6 @@
 {
   "name": "duckling-cli",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Drive Claude Code from Telegram. Run the Claude Agent SDK as a daemon; chat with it from anywhere.",
   "keywords": [
     "claude",

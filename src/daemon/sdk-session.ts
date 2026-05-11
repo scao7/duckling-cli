@@ -118,6 +118,13 @@ export class Session {
   private abortController = new AbortController();
   private currentTurnTextChunks: string[] = [];
   /**
+   * True if the current turn invoked a tool, produced a plan, or asked a
+   * question. Used by the daemon to decide whether to push a `session_done`
+   * footer — pure conversational replies (no work done) don't get one.
+   * Resets at the start of each turn (`system.init`).
+   */
+  currentTurnDidWork = false;
+  /**
    * Pending AskUserQuestion resolvers keyed by tool_use id. The SDK invokes
    * our `canUseTool` callback when the model wants to ask the user; the
    * callback parks a Promise here and returns it. Later, when the relay
@@ -233,11 +240,16 @@ export class Session {
     opts: { signal: AbortSignal; toolUseID: string },
   ): Promise<{ behavior: 'allow'; updatedInput?: Record<string, unknown> } | { behavior: 'deny'; message: string }> {
     if (toolName !== 'AskUserQuestion') {
+      // Any tool invocation other than the question prompt counts as "did
+      // work" — when the SDK opens the turn footer later, we want to surface
+      // the summary because something happened.
+      this.currentTurnDidWork = true;
       return { behavior: 'allow', updatedInput: input };
     }
     const toolUseId = opts.toolUseID;
     const questions = extractQuestions(input);
     this.status = 'waiting';
+    this.currentTurnDidWork = true;
     this.callbacks.onQuestion?.(this, toolUseId, questions);
     let answers: string[];
     try {
@@ -336,6 +348,10 @@ export class Session {
       const firstInit = !this.claudeSessionId;
       this.claudeSessionId = sysInit.session_id;
       this.status = 'running';
+      // New turn → reset the "did work" flag. We re-set it when a tool runs,
+      // a plan appears, or a question is asked. Pure conversational replies
+      // (Claude says "OK" with no work) leave it false → no summary footer.
+      this.currentTurnDidWork = false;
       if (firstInit) this.callbacks.onSessionInit?.(this);
       return;
     }
@@ -351,6 +367,8 @@ export class Session {
           this.callbacks.onAssistantText?.(this, b.text);
         } else if (b.type === 'tool_use' && typeof b.name === 'string') {
           const toolUseId = b.id ?? '';
+          // Any tool invocation counts as "did work" for footer purposes.
+          this.currentTurnDidWork = true;
           if (b.name === 'TodoWrite') {
             const todos = extractTodos(b.input);
             this.lastTodos = todos;
@@ -465,16 +483,42 @@ function randomId(bytes: number): string {
 }
 
 /** Crude slug from the first 4-6 words of the prompt. */
+/**
+ * Build a short, task-flavoured slug from the first user prompt. The goal is
+ * "the user can recognise this session in /sessions without having seen its
+ * id" — so we strip filler words ("please", "help", "我", "帮我", "可以"...)
+ * and keep the verbs + nouns. Falls back to a random suffix if the prompt is
+ * empty or pure stop-words.
+ */
 function slugFromPrompt(p: string): string {
-  const words = p
+  // English / generic filler that adds no task signal.
+  const STOP_EN = new Set([
+    'a', 'an', 'the', 'please', 'pls', 'can', 'could', 'would', 'should',
+    'help', 'me', 'i', 'you', 'we', 'our', 'my', 'your', 'this', 'that',
+    'is', 'are', 'was', 'were', 'be', 'been', 'being',
+    'to', 'for', 'of', 'in', 'on', 'at', 'and', 'or', 'but', 'with',
+    'do', 'does', 'did', 'have', 'has', 'had', 'will', 'just',
+  ]);
+  // Chinese fillers (subjects, particles, politeness).
+  const STOP_ZH = new Set([
+    '我', '你', '他', '她', '它', '我们', '你们', '他们',
+    '的', '了', '吗', '呢', '吧', '啊', '嗯', '哦',
+    '请', '帮', '帮我', '麻烦', '可以', '能', '能不能', '可不可以',
+    '一下', '现在', '一个', '这个', '那个',
+  ]);
+
+  // Split on whitespace + punctuation. Keep CJK characters as-is so each
+  // ideograph survives the split intact.
+  const tokens = p
     .toLowerCase()
-    .replace(/[^a-z0-9一-龥\s]+/g, ' ')
+    .replace(/[^a-z0-9一-鿿\s]+/g, ' ')
     .split(/\s+/)
-    .filter((w) => w.length > 0)
-    .slice(0, 5);
-  if (words.length === 0) return 'session-' + randomId(4);
-  const slug = words.join('-').slice(0, 40);
-  return slug || 'session-' + randomId(4);
+    .filter((w) => w.length > 0 && !STOP_EN.has(w) && !STOP_ZH.has(w));
+
+  // Take the first 5 surviving tokens. Cap total length so the chat picker
+  // / TG buttons stay legible.
+  const slug = tokens.slice(0, 5).join('-').slice(0, 40);
+  return slug || 'task-' + randomId(4);
 }
 
 function extractTodos(input: unknown): TodoItem[] {

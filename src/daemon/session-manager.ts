@@ -22,28 +22,12 @@ export class SessionManager {
   private claudeIdIndex = new Map<string, string>();
   private currentId: string | undefined;
 
-  // /stats counters, reset at local midnight (best-effort).
-  private dayKey = todayKey();
-  private costToday = 0;
-  private launchedToday = 0;
-
-  /** When true, daemon forwards routine tool_use events; else only Todo/Ask. */
-  verbose = false;
-  /** Default model for new sessions when caller doesn't override. */
-  defaultModel: string | undefined;
-
   constructor(private readonly callbacks: SessionCallbacks) {}
 
   spawn(opts: SessionSpawnOpts): Session {
-    this.rollDayIfNeeded();
-    const merged: SessionSpawnOpts = {
-      ...opts,
-      model: opts.model ?? this.defaultModel,
-    };
-    const session = new Session(merged, this.wrapCallbacks());
+    const session = new Session(opts, this.wrapCallbacks());
     this.sessions.set(session.id, session);
     this.currentId = session.id;
-    this.launchedToday++;
     log.info(`spawned session ${session.id} (name=${session.name})`);
     session.start();
     return session;
@@ -141,19 +125,6 @@ export class SessionManager {
     await s.interrupt();
   }
 
-  stats(): { totalCostUsdToday: number; sessionsLaunchedToday: number; runningCount: number } {
-    this.rollDayIfNeeded();
-    let running = 0;
-    for (const s of this.sessions.values()) {
-      if (s.status === 'running' || s.status === 'waiting' || s.status === 'starting') running++;
-    }
-    return {
-      totalCostUsdToday: this.costToday,
-      sessionsLaunchedToday: this.launchedToday,
-      runningCount: running,
-    };
-  }
-
   currentSessionId(): string | undefined {
     return this.currentId;
   }
@@ -173,7 +144,6 @@ export class SessionManager {
         cb.onAssistantText?.(s, text);
       },
       onToolUse: (s, tool, input, toolUseId) => {
-        if (!this.verbose) return;
         cb.onToolUse?.(s, tool, input, toolUseId);
       },
       onToolResult: (s, toolUseId, output) => {
@@ -187,37 +157,14 @@ export class SessionManager {
         cb.onQuestion?.(s, toolUseId, questions);
       },
       onComplete: (s, finalText) => {
-        this.bumpCost(s.costUsd);
         cb.onComplete?.(s, finalText);
       },
       onFailed: (s, err) => {
-        this.bumpCost(s.costUsd);
         cb.onFailed?.(s, err);
       },
     };
   }
 
-  /** We accumulate `costUsd` from the SDK's per-result totals. To avoid
-   *  double-counting we just track the running session's latest cost — the
-   *  SDK reports cumulative-per-session, not per-turn delta — so we sum the
-   *  current totals across all sessions started today on each request. */
-  private bumpCost(_latest: number): void {
-    this.rollDayIfNeeded();
-    let total = 0;
-    for (const s of this.sessions.values()) {
-      if (sameDay(s.startedAt, this.dayKey)) total += s.costUsd;
-    }
-    this.costToday = total;
-  }
-
-  private rollDayIfNeeded(): void {
-    const k = todayKey();
-    if (k !== this.dayKey) {
-      this.dayKey = k;
-      this.costToday = 0;
-      this.launchedToday = 0;
-    }
-  }
 }
 
 /**
@@ -279,12 +226,3 @@ function isPlausibleSessionId(s: string): boolean {
   return typeof s === 'string' && s.length > 0 && s.length <= 64 && /^[A-Za-z0-9_-]+$/.test(s);
 }
 
-function todayKey(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-}
-
-function sameDay(epoch: number, key: string): boolean {
-  const d = new Date(epoch);
-  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}` === key;
-}

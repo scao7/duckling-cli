@@ -51,8 +51,6 @@ interface WsAttachment {
   deviceName: string;
 }
 
-const TG_MAX_LEN = 4000;
-
 export class UserDO implements DurableObject {
   private storage: DurableObjectStorage;
   private tg: TgApi;
@@ -191,18 +189,16 @@ export class UserDO implements DurableObject {
       case 'pong':
         return;
       case 'session_started':
-        await this.onSessionStarted(chatId, att, msg.session);
+        // Cache the session record (plan/summary renderers read it for the
+        // session name) but DO NOT push a TG banner — per policy we only
+        // surface plan, summary, and error to the chat.
+        await this.recordSessionStarted(att, msg.session);
         return;
       case 'assistant_text':
-        await this.onAssistantText(chatId, att, msg.sessionId, msg.text);
-        return;
       case 'tool_use':
-        await this.onToolUse(chatId, att, msg.sessionId, msg.tool, msg.input);
-        return;
       case 'tool_result':
-        // No-op for now — the only tool_results we'd want surface via the
-        // assistant_text that follows. AskUserQuestion answers flow through
-        // /inbox-callback, not here.
+        // Mid-task progress — explicitly NOT forwarded. The user only sees:
+        // plan (TodoWrite), summary (session_done success), error (session_done failure).
         return;
       case 'plan_update':
         await this.onPlanUpdate(chatId, att, msg.sessionId, msg.todos);
@@ -215,9 +211,6 @@ export class UserDO implements DurableObject {
         return;
       case 'sessions_snapshot':
         await this.cacheSessionsSnapshot(msg.sessions, msg.currentId);
-        return;
-      case 'stats':
-        await this.sendStats(chatId, msg);
         return;
       case 'notice':
         await this.safeSend(chatId, () =>
@@ -252,8 +245,7 @@ export class UserDO implements DurableObject {
 
   // ---------- daemon → TG renderers ----------
 
-  private async onSessionStarted(
-    chatId: string,
+  private async recordSessionStarted(
     att: WsAttachment,
     session: SessionSummary,
   ): Promise<void> {
@@ -266,23 +258,9 @@ export class UserDO implements DurableObject {
       claudeSessionId: session.claudeSessionId,
       promptPreview: session.promptPreview,
     };
-    const body = renderAnchor(rec, session.id, true);
-    const keyboard: InlineKeyboard = [
-      [
-        { text: '▶ 切到此会话', callback_data: `s:${session.id}:switch` },
-        { text: '🛑 结束会话', callback_data: `s:${session.id}:kill` },
-      ],
-    ];
-    try {
-      const msgId = await this.tg.sendMessage(chatId, body, {
-        parseMode: 'HTML',
-        silent: true,
-        keyboard,
-      });
-      rec.anchorMessageId = msgId;
-    } catch (e) {
-      console.warn('anchor send failed:', e);
-    }
+    // No anchor message — see the policy comment in handleDaemonMessage.
+    // anchorMessageId stays undefined; refreshAnchor short-circuits on that,
+    // and session_forgotten's delete path is a no-op when there's no anchor.
     await this.storage.put(`ses:${session.id}`, rec);
   }
 
@@ -314,47 +292,9 @@ export class UserDO implements DurableObject {
     }
   }
 
-  private async onAssistantText(
-    chatId: string,
-    att: WsAttachment,
-    sessionId: string,
-    text: string,
-  ): Promise<void> {
-    const clean = text.trim();
-    if (!clean) return;
-    const rec = await this.storage.get<SessionRecord>(`ses:${sessionId}`);
-    const head = `<b>${esc(rec?.name ?? sessionId)}</b> · ${esc(att.deviceName)}`;
-    const chunks = chunkForTg(clean, TG_MAX_LEN - head.length - 8);
-    for (let i = 0; i < chunks.length; i++) {
-      const body = esc(chunks[i]);
-      const suffix = chunks.length > 1 ? ` <i>(${i + 1}/${chunks.length})</i>` : '';
-      await this.safeSend(chatId, () =>
-        this.tg.sendMessage(chatId, `${head}${suffix}\n${body}`, {
-          parseMode: 'HTML',
-          silent: true,
-        }),
-      );
-    }
-  }
-
-  private async onToolUse(
-    chatId: string,
-    _att: WsAttachment,
-    sessionId: string,
-    tool: string,
-    input: unknown,
-  ): Promise<void> {
-    const rec = await this.storage.get<SessionRecord>(`ses:${sessionId}`);
-    const preview = previewToolInput(tool, input);
-    await this.safeSend(chatId, () =>
-      this.tg.sendMessage(
-        chatId,
-        `🔧 <b>${esc(rec?.name ?? sessionId)}</b> · <code>${esc(tool)}</code>` +
-          (preview ? `\n<pre>${esc(preview)}</pre>` : ''),
-        { parseMode: 'HTML', silent: true },
-      ),
-    );
-  }
+  // onAssistantText / onToolUse intentionally removed — we no longer surface
+  // mid-task progress (Claude's chatter or tool calls) to Telegram. Only plan,
+  // summary, and error reach the chat.
 
   private async onPlanUpdate(
     chatId: string,
@@ -481,22 +421,6 @@ export class UserDO implements DurableObject {
       }
       await this.refreshAnchor(chatId, s.id, s.id === currentId);
     }
-  }
-
-  private async sendStats(
-    chatId: string,
-    msg: Extract<DaemonToRelay, { type: 'stats' }>,
-  ): Promise<void> {
-    await this.safeSend(chatId, () =>
-      this.tg.sendMessage(
-        chatId,
-        `📊 <b>Today</b>\n` +
-          `Running: ${msg.runningCount}\n` +
-          `Launched: ${msg.sessionsLaunchedToday}\n` +
-          `Cost: $${msg.totalCostUsdToday.toFixed(4)}`,
-        { parseMode: 'HTML', silent: true },
-      ),
-    );
   }
 
   // ---------- TG → daemon routing ----------
@@ -796,12 +720,7 @@ export class UserDO implements DurableObject {
     try {
       await this.tg.sendMessage(
         body.chatId,
-        `🦆 已配对 <b>${esc(body.deviceName)}</b>。\n\n` +
-          `在那台机器上跑 <code>duckling start</code>，然后：\n` +
-          `  · <code>/new &lt;prompt&gt;</code> —— 开新会话\n` +
-          `  · 直接发消息 —— 接着当前会话聊\n` +
-          `  · <code>/sessions</code> —— 看看有哪些会话\n` +
-          `  · <code>/help</code> —— 命令速查`,
+        `🦆 已配对 <b>${esc(body.deviceName)}</b>。发任务给我即可,<code>/help</code> 看命令。`,
         { parseMode: 'HTML', silent: true },
       );
     } catch (e) {
@@ -913,38 +832,9 @@ function renderPlan(sessionName: string, todos: TodoItem[]): string {
   return `📋 <b>${esc(sessionName)}</b>\n${lines.join('\n')}`;
 }
 
-function previewToolInput(tool: string, input: unknown): string {
-  if (!input || typeof input !== 'object') return '';
-  const i = input as Record<string, unknown>;
-  if (tool === 'Bash' && typeof i.command === 'string') return clip(i.command, 200);
-  if ((tool === 'Edit' || tool === 'Write') && typeof i.file_path === 'string') {
-    return clip(String(i.file_path), 200);
-  }
-  if (tool === 'Read' && typeof i.file_path === 'string') return clip(String(i.file_path), 200);
-  // Generic — first stringy field.
-  for (const k of Object.keys(i)) {
-    if (typeof i[k] === 'string') return clip(`${k}: ${i[k] as string}`, 200);
-  }
-  return '';
-}
-
-function clip(s: string, max: number): string {
-  return s.length > max ? s.slice(0, max - 1) + '…' : s;
-}
-
-function chunkForTg(text: string, limit: number): string[] {
-  const out: string[] = [];
-  let remaining = text;
-  while (remaining.length > limit) {
-    let breakAt = remaining.lastIndexOf('\n', limit);
-    if (breakAt <= 0) breakAt = remaining.lastIndexOf(' ', limit);
-    if (breakAt <= 0) breakAt = limit;
-    out.push(remaining.slice(0, breakAt));
-    remaining = remaining.slice(breakAt).replace(/^\s+/, '');
-  }
-  if (remaining) out.push(remaining);
-  return out;
-}
+// previewToolInput / clip / chunkForTg removed along with onAssistantText /
+// onToolUse — they only existed to render mid-task progress, which the
+// "plan + summary + error only" policy disallows.
 
 function shortId(): string {
   // 6 alphanumeric chars — enough entropy for concurrent-question disambiguation
@@ -997,20 +887,9 @@ function parseCommand(command: string, args: string, fromUsername?: string): Par
     }
     case 'stop':
       return { msg: { type: 'stop_current' } };
-    case 'stats':
-      return { msg: { type: 'get_stats' } };
-    case 'verbose': {
-      const v = args.trim().toLowerCase();
-      if (v === 'on' || v === 'true' || v === '1') return { msg: { type: 'set_verbose', verbose: true } };
-      if (v === 'off' || v === 'false' || v === '0') return { msg: { type: 'set_verbose', verbose: false } };
-      return { msg: null, usage: '/verbose on|off' };
-    }
-    case 'model': {
-      const model = args.trim();
-      if (!model) return { msg: null, usage: '/model sonnet|opus|haiku' };
-      return { msg: { type: 'set_model', model } };
-    }
     default:
+      // /stats /model /verbose intentionally removed — at-desk concerns that
+      // pull the user back to fiddle. Unknown command falls through.
       return { msg: null };
   }
 }
