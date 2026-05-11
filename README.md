@@ -99,50 +99,54 @@ Full recipe + cost calculator (spoiler: **$0** on Cloudflare's free tier for sma
 
 ### After setup — talk to the bot
 
-Then chat with [@DucklingCli_Bot](https://t.me/DucklingCli_Bot) (Path A) or your own bot (Path B) on Telegram:
+Send a task. Get a plan. Walk away. Wake up to a "done":
 
 ```
-You:   /new write a quicksort in src/quicksort.ts
-Bot:   🚀 quicksort on macbook · ⚪ starting   [▶ switch to this] [🛑 end]
-Bot:   📋 quicksort
-       ⬜ Write quicksort.ts
-       ⬜ Add a unit test
-       ⬜ Run the test
-Bot:   quicksort · macbook
-       I've written the function. Running the test now…
-You:   /sessions
-Bot:   Sessions:
-       🟢 quicksort · mOw0F3xO ◀
-       …
+You:   /new refactor the auth middleware to use the new token format
+Bot:   📋 refactor-auth-middleware
+       ⬜ Read existing middleware
+       ⬜ Adapt to new token shape
+       ⬜ Update tests
+       ⬜ Run lint + tests
+       ...                                       ← edits in place as TODOs progress
+Bot:   ❓ refactor-auth-middleware · Token source
+       Should I read tokens from headers only, or also cookies?
+       [ headers only ] [ headers + cookies ]    ← tap one
+       ...                                       ← (silent while it works)
+Bot:   ✅ refactor-auth-middleware · completed · 4m12s · $0.0341
 ```
+
+That's it. **Four message types ever**: plan, question, done, error. No "I'm now reading file X", no "Running npm test...", no anchor banners. The chat is for milestones, not chit-chat.
 
 ## What you can do
 
-### Commands
+### The full command list
 
 | Command | What it does |
 |---|---|
-| `/new <prompt>` | Open a new Claude session |
-| `/sessions` | List active and recent sessions |
-| `/switch <id\|name>` | Send future free-text chat to this session |
-| `/resume <id\|name>` | Continue an old session that ended |
-| `/fork <id\|name>` | Branch off from a session into a new line |
-| `/kill <id\|name>` | Stop a session (history kept, can `/resume`) |
-| `/forget <id\|name>` | Stop **and wipe** — deletes Claude's transcript on disk |
-| `/stop` | Interrupt the current generation only |
-| `/stats` | Today's session count + spend |
-| `/model sonnet\|opus\|haiku` | Default model for new sessions |
-| `/verbose on\|off` | Forward routine tool_use events |
-| `/help` | Quick command list |
+| `/new <task>` | Hire a new "employee" — opens a Claude session with that task |
+| `/kill` | Stop the current task (or `/kill <name>`, or tap from a picker) |
+| `/help` | Three-line cheatsheet |
 
-Running a session-targeting command without arguments (e.g. just `/kill`) pops a tappable picker — **no IDs to memorise**.
+That's the whole `/` menu. **Three commands.** Anything more would mean adding "things to fiddle with on your phone" — which is exactly what this tool refuses to do.
 
-### From the chat itself
+### Without typing commands
 
-- **Anchor messages** — every session drops a 🚀 message with `[▶ switch] [🛑 end]` buttons. Scroll up, tap to switch.
-- **One-tap questions** — when Claude calls `AskUserQuestion`, options become inline buttons. No typing required.
-- **Edit-in-place plans** — `TodoWrite` plans render as a single message that updates as items complete.
-- **Free-form chat** — anything you type without a leading `/` continues the current session.
+- **Direct message** — anything you type without a leading `/` continues the current task ("look, also handle the case where the token is empty").
+- **One-tap decisions** — when Claude calls `AskUserQuestion`, options become inline buttons. No typing required.
+- **`/kill` with no args** — pops a tappable picker of running sessions. You never have to memorise names or IDs.
+
+### Design rules duckling lives by
+
+1. **Production happens at the desk.** This tool serves the moments you're *not* at the desk. Nothing else.
+2. **Make the user do less, not more.** Pickers > typing. Defaults > config. Auto > manual.
+3. **No feature that pulls the user back to the phone.** If it tempts you to "just check in", it's wrong.
+4. **Fewer messages is better.** Only plan, approve, done, error, plus questions Claude genuinely cannot answer without you.
+5. **Subordinate, not chat buddy.** An employee doesn't IM their boss play-by-play; they report at milestones.
+6. **Test before adding a feature:** does this let the user leave their computer, or force them to stare at the phone? Stare → no.
+7. **North star: send a task before bed, wake up to one "done" message.**
+
+If you fork and find yourself wanting to add notifications, dashboards, "live tail" mode, status bars, anything that buzzes more than once per task — re-read the seven rules. duckling is built around them.
 
 ## How it works
 

@@ -99,47 +99,54 @@ duckling start
 
 ### 配完之后 —— 跟 bot 聊
 
-然后在 Telegram 上跟 [@DucklingCli_Bot](https://t.me/DucklingCli_Bot)（路线 A）或者你自己的 bot（路线 B）聊：
+发任务,拿 plan,走开,醒来看到 "done":
 
 ```
-你：   /new 写个 quicksort 放到 src/quicksort.ts
-Bot：  🚀 quicksort on macbook · ⚪ starting   [▶ 切到此会话] [🛑 结束会话]
-Bot：  📋 quicksort
-       ⬜ 写 quicksort.ts
-       ⬜ 加单测
-       ⬜ 跑测试
-Bot：  quicksort · macbook
-       函数写好了，现在跑测试……
-你：   /sessions
-Bot：  Sessions:
-       🟢 quicksort · mOw0F3xO ◀
-       …
+你：   /new 把 auth middleware 重构成新的 token 格式
+Bot：  📋 refactor-auth-middleware
+       ⬜ 读现有 middleware
+       ⬜ 改成新 token 格式
+       ⬜ 改测试
+       ⬜ 跑 lint + 测试
+       ...                                       ← TODO 推进时原地更新
+Bot：  ❓ refactor-auth-middleware · Token 来源
+       从 header 读,还是 header + cookie 都读?
+       [ 只 header ] [ header + cookie ]         ← 点一个
+       ...                                       ← (干活时静默)
+Bot：  ✅ refactor-auth-middleware · completed · 4m12s · $0.0341
 ```
+
+就这。**总共四种消息**:plan、问题、完成、错误。没有 "我正在读文件 X"、没有 "正在跑 npm test..."、没有 🚀 启动横幅。聊天是用来报里程碑的,不是用来闲聊的。
 
 ## 能干啥
 
-### 命令
+### 全部命令
 
 | 命令 | 作用 |
 |---|---|
-| `/new <prompt>` | 开新 session |
-| `/sessions` | 列出活跃和最近的 session |
-| `/switch <id\|name>` | 把"当前 session"切到指定那个 |
-| `/resume <id\|name>` | 恢复已经结束的旧 session |
-| `/fork <id\|name>` | 从某个 session 分叉一条新支线 |
-| `/kill <id\|name>` | 结束 session（历史保留，可 `/resume` 救回） |
-| `/forget <id\|name>` | 完全删除：连 Claude 那边的 jsonl 历史一起干掉 |
-| `/stop` | 只打断当前这一轮生成，session 不关 |
-| `/stats` | 今日 session 数 + 花费 |
-| `/model sonnet\|opus\|haiku` | 设默认模型 |
-| `/verbose on\|off` | 是否转发常规 tool_use 事件 |
-| `/help` | 命令速查 |
+| `/new <任务>` | 派活 —— 开一个 Claude session 跑这个任务 |
+| `/kill` | 叫停当前任务(或 `/kill <名字>`,或不带参数从弹出列表里点) |
+| `/help` | 三行速查 |
 
-只输命令不带参数（比如直接 `/kill`），会弹一个 **可点的选择器** —— 不用记 ID。
+`/` 菜单里就这**三条**。多一条都会变成"在手机上多一件可摆弄的事" —— 这工具的初衷就是拒绝这个。
 
-### 聊天里直接操作
+### 不用打字也能做
 
-- **Anchor 消息** —— 每开一个 session，🚀 那条消息上有 `[▶ 切到此会话] [🛑 结束会话]` 按钮，往上滚找到就能切。
+- **直接发消息** —— 不带 `/` 的文字接着当前任务说("顺便处理一下 token 为空的情况")。
+- **一键决策** —— Claude 调 `AskUserQuestion` 时,每个选项变成按钮,点一下就行。
+- **`/kill` 不带参数** —— 弹一个**可点的列表**列出活着的 session。永远不用记名字。
+
+### duckling 守的设计原则
+
+1. **生产在电脑前**,这个工具只服务"不在电脑前"的时刻。其它情况都不该用它。
+2. **让用户做更少,不是做更多。** 选择器 > 打字。默认值 > 配置。自动 > 手动。
+3. **任何把用户拉回手机的功能都不要。** 让你"过来看看进度"的就是错的。
+4. **消息越少越好。** 只发 plan、approve、完成、错误,以及 Claude 真没法不问你就推进的问题。
+5. **下属关系,不是闲聊伙伴。** 员工不会跟老板一直 IM,只在里程碑和重要事情上汇报。
+6. **加功能前问一句:这让用户能离开电脑,还是必须盯着手机?** 必须盯 → 拒绝。
+7. **北极星:用户睡前发任务,醒来看一条"完成"消息。**
+
+如果你 fork 出去之后冒出想加通知、加 dashboard、加 "实时尾巴"、加状态条、任何会让 bot 每个任务发不止一次声响的念头 —— 回来重读上面七条。duckling 整个就是围着这七条建的。
 - **一键回答问题** —— Claude 调 `AskUserQuestion`，每个选项变成按钮，点一下就行。
 - **Plan 原地编辑** —— `TodoWrite` 是一条消息持续更新，看着任务一项项打勾。
 - **直接讲话** —— 不带 `/` 的文字默认进当前 session 接着聊。
