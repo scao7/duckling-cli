@@ -34,6 +34,13 @@ export async function runDaemon(): Promise<void> {
   const cfg = loadConfigOrDie();
   writePidFile();
 
+  // The daemon spawns SDK sessions in this directory. CLI's `duckling start`
+  // forwards the user's pwd via DUCKLING_CWD so this matches their terminal
+  // claude — same `~/.claude/projects/<encoded-cwd>/` session pool, so /new's
+  // picker shows the same conversations the user was already working in.
+  const userCwd = process.env.DUCKLING_CWD || process.cwd();
+  log.info(`session cwd: ${userCwd}`);
+
   const wsUrl = deriveWsUrl(cfg.relayUrl, cfg.deviceToken);
   const relay = new RelayClient(wsUrl);
   let welcomed = false;
@@ -130,7 +137,7 @@ export async function runDaemon(): Promise<void> {
             prompt: msg.prompt,
             name: msg.name,
             model: msg.model,
-            cwd: process.env.HOME ?? process.cwd(),
+            cwd: userCwd,
           });
         } catch (e) {
           log.error('spawn failed:', e instanceof Error ? e.message : e);
@@ -228,7 +235,7 @@ export async function runDaemon(): Promise<void> {
       case 'request_resumable':
         relay.send({
           type: 'resumable_list',
-          resumable: manager.listResumable(process.env.HOME ?? process.cwd()),
+          resumable: manager.listResumable(userCwd),
         });
         return;
       case 'ping':

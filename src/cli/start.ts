@@ -48,13 +48,19 @@ async function spawnDaemonDetached(): Promise<void> {
   if (!cliPath || !fs.existsSync(cliPath)) {
     throw new Error(`Cannot locate duckling CLI to spawn (${cliPath}).`);
   }
+  // Forward the directory the user ran `duckling start` from so the daemon
+  // can use it as the working dir for SDK sessions. This aligns the daemon's
+  // cwd with the user's terminal `claude` cwd, so `~/.claude/projects/<cwd>/`
+  // shows the same session pool the user has been working in.
+  const userCwd = process.cwd();
   const child = spawn(process.execPath, [cliPath, '__daemon'], {
     detached: true,
     stdio: ['ignore', out, err],
     cwd: path.dirname(cliPath),
-    env: process.env,
+    env: { ...process.env, DUCKLING_CWD: userCwd },
   });
   child.unref();
+  process.stdout.write(`(cwd: ${userCwd})\n`);
 }
 
 async function waitForPid(maxMs: number): Promise<void> {
