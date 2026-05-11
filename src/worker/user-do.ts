@@ -430,7 +430,38 @@ export class UserDO implements DurableObject {
       text: string;
       fromUsername?: string;
       chatId: string;
+      /** TG message_id this text is a reply to, if any (force-reply targeting). */
+      replyToMessageId?: number;
     };
+    // If the user is replying to our /new force-reply prompt, treat the
+    // whole message as the new session's task — no need to type /new again.
+    const pendingNewMsgId = await this.storage.get<number>('pendingNewMsgId');
+    if (
+      pendingNewMsgId &&
+      body.replyToMessageId &&
+      body.replyToMessageId === pendingNewMsgId &&
+      body.text.trim().length > 0
+    ) {
+      await this.storage.delete('pendingNewMsgId');
+      const newMsg: RelayToDaemon = {
+        type: 'new_session',
+        prompt: body.text.trim(),
+        fromUsername: body.fromUsername,
+      };
+      const delivered = this.broadcastToDaemons(newMsg);
+      if (delivered === 0) {
+        try {
+          await this.tg.sendMessage(
+            body.chatId,
+            `<i>📭 没有在线的 daemon —— 在某台机器上跑 <code>duckling start</code>。</i>`,
+            { parseMode: 'HTML', silent: true },
+          );
+        } catch {
+          // Best-effort notice; not fatal.
+        }
+      }
+      return json(200, { ok: true, kind: 'new_session_from_reply', delivered });
+    }
     // If there's a pending multi-question, treat this reply as the answer.
     const pendingShort = await this.storage.get<string>('pendingQ');
     if (pendingShort) {
@@ -489,8 +520,26 @@ export class UserDO implements DurableObject {
     };
     const parsed = parseCommand(body.command, body.args, body.fromUsername);
     if (!parsed.msg) {
-      // For commands that operate on a session, replace the "type the id"
-      // hint with a tappable picker — the user doesn't have to know any IDs.
+      // Bare /new: ask the user "what's the task?" via TG's native force-
+      // reply UX, then watch for their reply in handleInboxText. This makes
+      // tapping /new from the `/`-menu feel like "create employee" instead
+      // of like a parsing error.
+      if (body.command === 'new') {
+        try {
+          const msgId = await this.tg.sendMessage(
+            body.chatId,
+            '🦆 派什么活给我?直接回复这条消息描述任务即可。',
+            { parseMode: 'HTML', silent: true, forceReply: true },
+          );
+          await this.storage.put('pendingNewMsgId', msgId);
+        } catch (e) {
+          console.warn('force-reply prompt failed:', e);
+        }
+        return json(200, { ok: true, prompt: 'force-reply' });
+      }
+      // For commands that operate on an existing session, replace the
+      // "type the id" hint with a tappable picker — the user doesn't have
+      // to know any IDs.
       if (
         body.command === 'kill' ||
         body.command === 'switch' ||
