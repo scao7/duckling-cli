@@ -430,11 +430,13 @@ export class UserDO implements DurableObject {
       text: string;
       fromUsername?: string;
       chatId: string;
-      /** TG message_id this text is a reply to, if any (force-reply targeting). */
+      /** TG message_id this text is a reply to, if any. Used to detect
+       *  the user long-press-replying to our /new prompt. */
       replyToMessageId?: number;
     };
-    // If the user is replying to our /new force-reply prompt, treat the
-    // whole message as the new session's task — no need to type /new again.
+    // If the user long-pressed our /new prompt and replied with a task,
+    // route it as new_session instead of chat. Match by message_id so
+    // replies to other bot messages don't accidentally start sessions.
     const pendingNewMsgId = await this.storage.get<number>('pendingNewMsgId');
     if (
       pendingNewMsgId &&
@@ -457,7 +459,7 @@ export class UserDO implements DurableObject {
             { parseMode: 'HTML', silent: true },
           );
         } catch {
-          // Best-effort notice; not fatal.
+          // Best-effort; not fatal.
         }
       }
       return json(200, { ok: true, kind: 'new_session_from_reply', delivered });
@@ -528,14 +530,14 @@ export class UserDO implements DurableObject {
         try {
           const msgId = await this.tg.sendMessage(
             body.chatId,
-            '🦆 派什么活给我?直接回复这条消息描述任务即可。',
+            '🦆 你好,<b>长按回复这条消息</b>来描述任务。',
             { parseMode: 'HTML', silent: true, forceReply: true },
           );
           await this.storage.put('pendingNewMsgId', msgId);
         } catch (e) {
-          console.warn('force-reply prompt failed:', e);
+          console.warn('new-prompt send failed:', e);
         }
-        return json(200, { ok: true, prompt: 'force-reply' });
+        return json(200, { ok: true, prompt: 'new' });
       }
       // For commands that operate on an existing session, replace the
       // "type the id" hint with a tappable picker — the user doesn't have

@@ -270,7 +270,7 @@ async function handleFreeText(update: TgUpdate, env: Env): Promise<void> {
       text: msg.text,
       fromUsername: msg.from?.username,
       chatId: String(msg.chat.id),
-      // Used by /inbox-text to detect replies to the /new force-reply prompt.
+      // Used by /inbox-text to detect long-press replies to our /new prompt.
       replyToMessageId: msg.reply_to_message?.message_id,
     }),
   });
