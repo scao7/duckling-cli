@@ -1,0 +1,30 @@
+name = "duckling-relay"
+main = "src/worker/worker.ts"
+compatibility_date = "2025-01-15"
+compatibility_flags = ["nodejs_compat"]
+
+# Routes — when you have a custom domain set up, list them here. The default
+# *.workers.dev URL works without any extra config.
+# routes = [{ pattern = "duckling.example.com/*", custom_domain = true }]
+
+[[durable_objects.bindings]]
+name = "DIRECTORY"
+class_name = "DirectoryDO"
+
+[[durable_objects.bindings]]
+name = "USER"
+class_name = "UserDO"
+
+# Durable Objects need a migration entry to be created on first deploy.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DirectoryDO", "UserDO"]
+
+# Required secrets (set with `wrangler secret put`):
+#   TELEGRAM_BOT_TOKEN  — from @BotFather
+#
+# Optional vars (set inline or via `wrangler vars`):
+#   ADMIN_TOKEN  — gates the /pair/bind escape hatch (omit to disable it)
+[vars]
+PAIR_TTL_MS = "600000"     # 10 minutes
+APPROVAL_TTL_MS = "900000" # 15 minutes
