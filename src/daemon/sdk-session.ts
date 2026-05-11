@@ -322,6 +322,17 @@ export class Session {
   // ---------- internal ----------
 
   private fail(error: string): void {
+    // Idempotent: if the session already ended (success / failed / killed),
+    // ignore late failure events. The SDK can deliver both a result-with-
+    // error AND a thrown exception from the same underlying problem; we
+    // only want one session_done out.
+    if (
+      this.status === 'failed' ||
+      this.status === 'killed' ||
+      this.status === 'completed'
+    ) {
+      return;
+    }
     this.status = 'failed';
     this.lastError = error;
     this.completedAt = Date.now();
@@ -334,10 +345,17 @@ export class Session {
       for await (const m of this.queryHandle) {
         this.handleSdkMessage(m);
       }
-    } catch (e) {
-      if (this.status !== 'killed') {
-        this.fail(e instanceof Error ? e.message : String(e));
+      // Stream ended without a thrown exception. If we recorded a deferred
+      // failure via lastError (from a result.error_* subtype), flush it now.
+      if (this.lastError && this.status === 'running') {
+        this.fail(this.lastError);
       }
+    } catch (e) {
+      // Prefer the thrown message — usually more actionable than the bare
+      // SDK result subtype we stashed in lastError. `fail()` is idempotent
+      // and returns early if the session has already terminated.
+      const errMsg = e instanceof Error ? e.message : String(e);
+      this.fail(errMsg || this.lastError || 'SDK error');
     }
   }
 
@@ -409,10 +427,12 @@ export class Session {
         this.status = 'running'; // ready for next sendMessage
         this.callbacks.onComplete?.(this, finalText);
       } else {
-        this.status = 'failed';
-        this.completedAt = Date.now();
+        // Don't fail immediately — the SDK usually throws a more detailed
+        // error message right after this result. Record the subtype as a
+        // fallback and let consumeMessages() catch the thrown error for
+        // the real message. If no throw arrives, the post-loop flush below
+        // emits with the recorded fallback.
         this.lastError = `SDK result ${r.subtype}`;
-        this.callbacks.onFailed?.(this, this.lastError);
         this.inputStream.end();
       }
     }

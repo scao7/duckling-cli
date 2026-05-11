@@ -56,43 +56,37 @@ export class SessionManager {
     const projectsDir = path.join(os.homedir(), '.claude', 'projects');
     if (!fs.existsSync(projectsDir)) return [];
     const encoded = (cwd ?? process.env.HOME ?? '').replace(/\//g, '-');
-    const candidates: string[] = [];
-    // Prefer the canonical cwd directory; fall back to all subdirs.
+    // ONLY scan the current cwd's project dir — the SDK's `--resume` looks
+    // up the session in cwd's encoded subdir, so showing sessions from other
+    // cwds in the picker leads to "No conversation found" failures when the
+    // user taps them.
     const primary = path.join(projectsDir, encoded);
-    if (encoded && fs.existsSync(primary)) {
-      candidates.push(primary);
-    } else {
-      try {
-        for (const entry of fs.readdirSync(projectsDir)) {
-          candidates.push(path.join(projectsDir, entry));
-        }
-      } catch {
-        return [];
-      }
+    if (!encoded || !fs.existsSync(primary)) return [];
+    let files: string[];
+    try {
+      files = fs.readdirSync(primary).filter((f) => f.endsWith('.jsonl'));
+    } catch {
+      return [];
     }
     const out: ResumableEntry[] = [];
-    for (const dir of candidates) {
-      let files: string[];
+    for (const f of files) {
+      const full = path.join(primary, f);
+      const claudeSessionId = f.replace(/\.jsonl$/, '');
+      if (!/^[A-Za-z0-9_-]{8,}$/.test(claudeSessionId)) continue;
+      // Skip sessions the daemon already has in memory — those go through
+      // the normal "live" sessions list.
+      if (this.claudeIdIndex.has(claudeSessionId)) continue;
+      let mtimeMs = 0;
       try {
-        files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl'));
+        mtimeMs = fs.statSync(full).mtimeMs;
       } catch {
         continue;
       }
-      for (const f of files) {
-        const full = path.join(dir, f);
-        const claudeSessionId = f.replace(/\.jsonl$/, '');
-        if (!/^[A-Za-z0-9_-]{8,}$/.test(claudeSessionId)) continue;
-        // Skip sessions the daemon already has in memory — those go through
-        // the normal "live" sessions list.
-        if (this.claudeIdIndex.has(claudeSessionId)) continue;
-        let mtimeMs = 0;
-        try {
-          mtimeMs = fs.statSync(full).mtimeMs;
-        } catch {
-          continue;
-        }
-        out.push({ claudeSessionId, mtimeMs, firstPrompt: extractFirstPrompt(full) });
-      }
+      const firstPrompt = extractFirstPrompt(full);
+      // Filter out sessions with no readable first user prompt — those are
+      // typically empty/corrupted transcripts, not useful to resume.
+      if (!firstPrompt || firstPrompt.trim().length < 2) continue;
+      out.push({ claudeSessionId, mtimeMs, firstPrompt });
     }
     out.sort((a, b) => b.mtimeMs - a.mtimeMs);
     return out;
