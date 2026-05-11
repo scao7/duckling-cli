@@ -220,6 +220,46 @@ export class UserDO implements DurableObject {
       case 'session_forgotten':
         await this.onSessionForgotten(chatId, msg.sessionId);
         return;
+      case 'resumable_list':
+        await this.onResumableList(msg.resumable);
+        return;
+    }
+  }
+
+  private async onResumableList(
+    resumable: Extract<DaemonToRelay, { type: 'resumable_list' }>['resumable'],
+  ): Promise<void> {
+    const pending = await this.storage.get<{ chatId: string; expiresAt: number }>(
+      'pendingNewPicker',
+    );
+    if (!pending || pending.expiresAt < Date.now()) {
+      // No /new picker outstanding — stale response, drop it. Could happen
+      // if the user typed /new twice or if the daemon was slow.
+      await this.storage.delete('pendingNewPicker');
+      return;
+    }
+    await this.storage.delete('pendingNewPicker');
+    const list = resumable.slice(0, 5); // top-5 newest, picker stays scannable
+    const rows: InlineKeyboard = list.map((r) => [
+      {
+        text: pickerLabelForResumable(r),
+        callback_data: `n:resume:${r.claudeSessionId.slice(0, 50)}`,
+      },
+    ]);
+    // Always offer the "new employee" path at the bottom.
+    rows.push([{ text: '➕ 新员工', callback_data: 'n:fresh' }]);
+    const body =
+      list.length > 0
+        ? '🦆 派活给谁?选一个旧任务接着干,或者点 <b>新员工</b> 开个全新的。'
+        : '🦆 没有可恢复的旧任务,直接派给 <b>新员工</b>。';
+    try {
+      await this.tg.sendMessage(pending.chatId, body, {
+        parseMode: 'HTML',
+        silent: true,
+        keyboard: rows,
+      });
+    } catch (e) {
+      console.warn('new-picker send failed:', e);
     }
   }
 
@@ -430,57 +470,7 @@ export class UserDO implements DurableObject {
       text: string;
       fromUsername?: string;
       chatId: string;
-      /** TG message_id this text is a reply to, if any. Used to detect
-       *  the user long-press-replying to our /new prompt. */
-      replyToMessageId?: number;
     };
-    // If a /new prompt is outstanding, two paths:
-    //   (a) user long-press-replied to the prompt → consume as task
-    //   (b) user typed a regular message → remind them how to reply right,
-    //       then clear pendingNewMsgId so subsequent text routes normally
-    const pendingNewMsgId = await this.storage.get<number>('pendingNewMsgId');
-    if (pendingNewMsgId) {
-      const repliedToPrompt =
-        body.replyToMessageId === pendingNewMsgId && body.text.trim().length > 0;
-      if (repliedToPrompt) {
-        await this.storage.delete('pendingNewMsgId');
-        const newMsg: RelayToDaemon = {
-          type: 'new_session',
-          prompt: body.text.trim(),
-          fromUsername: body.fromUsername,
-        };
-        const delivered = this.broadcastToDaemons(newMsg);
-        if (delivered === 0) {
-          try {
-            await this.tg.sendMessage(
-              body.chatId,
-              `<i>📭 没有在线的 daemon —— 在某台机器上跑 <code>duckling start</code>。</i>`,
-              { parseMode: 'HTML', silent: true },
-            );
-          } catch {
-            // Best-effort; not fatal.
-          }
-        }
-        return json(200, { ok: true, kind: 'new_session_from_reply', delivered });
-      }
-      // (b) wrong-reply path — explain once and clear, so we don't nag
-      // forever. The user's text doesn't fall through to chat to avoid a
-      // double "no live session" reply.
-      await this.storage.delete('pendingNewMsgId');
-      try {
-        await this.tg.sendMessage(
-          body.chatId,
-          `这条不是回复 /new 提示哦 🦆\n` +
-            `想派活,两种做法,任选其一:\n` +
-            `  · <b>长按</b>上面那条 "你好,长按回复…" → 选 <b>回复</b> → 输入任务\n` +
-            `  · 或者直接发:<code>/new 你的任务</code>(一条搞定)`,
-          { parseMode: 'HTML', silent: true },
-        );
-      } catch {
-        // Best-effort.
-      }
-      return json(200, { ok: true, kind: 'new_prompt_missed' });
-    }
     // If there's a pending multi-question, treat this reply as the answer.
     const pendingShort = await this.storage.get<string>('pendingQ');
     if (pendingShort) {
@@ -544,17 +534,29 @@ export class UserDO implements DurableObject {
       // tapping /new from the `/`-menu feel like "create employee" instead
       // of like a parsing error.
       if (body.command === 'new') {
-        try {
-          const msgId = await this.tg.sendMessage(
-            body.chatId,
-            '🦆 你好,<b>长按回复这条消息</b>来描述任务。',
-            { parseMode: 'HTML', silent: true, forceReply: true },
-          );
-          await this.storage.put('pendingNewMsgId', msgId);
-        } catch (e) {
-          console.warn('new-prompt send failed:', e);
+        // Ask the daemon for resumable sessions on disk. When `resumable_list`
+        // arrives we'll render a picker (existing sessions + 新员工 button).
+        // If no daemon is online we just tell the user up-front.
+        const delivered = this.broadcastToDaemons({ type: 'request_resumable' });
+        if (delivered === 0) {
+          try {
+            await this.tg.sendMessage(
+              body.chatId,
+              `<i>📭 没有在线的 daemon —— 在某台机器上跑 <code>duckling start</code>。</i>`,
+              { parseMode: 'HTML', silent: true },
+            );
+          } catch {
+            // Best-effort.
+          }
+          return json(200, { ok: false });
         }
-        return json(200, { ok: true, prompt: 'new' });
+        // Remember which chat is waiting for the picker. The TTL avoids
+        // a stale daemon reply painting a picker into an old chat.
+        await this.storage.put('pendingNewPicker', {
+          chatId: body.chatId,
+          expiresAt: Date.now() + 30_000,
+        });
+        return json(200, { ok: true, prompt: 'new-picker' });
       }
       // For commands that operate on an existing session, replace the
       // "type the id" hint with a tappable picker — the user doesn't have
@@ -709,6 +711,24 @@ export class UserDO implements DurableObject {
         return json(200, { ok: true, delivered: ok });
       }
     }
+    // n:fresh                     — spawn a blank "新员工"
+    // n:resume:<claudeSessionId>  — resume that on-disk session
+    if (parts[0] === 'n') {
+      if (parts[1] === 'fresh') {
+        const ok = this.broadcastToDaemons({
+          type: 'new_session',
+          prompt: '',
+        });
+        return json(200, { ok: true, delivered: ok, kind: 'new-fresh' });
+      }
+      if (parts[1] === 'resume' && parts[2]) {
+        const ok = this.broadcastToDaemons({
+          type: 'resume_session',
+          idOrName: parts[2],
+        });
+        return json(200, { ok: true, delivered: ok, kind: 'new-resume' });
+      }
+    }
     return json(200, { ok: false });
   }
 
@@ -851,6 +871,17 @@ function statusIcon(status: string): string {
     default:
       return '⚪';
   }
+}
+
+function pickerLabelForResumable(r: { mtimeMs: number; firstPrompt?: string }): string {
+  const ago = formatAgo(Date.now() - r.mtimeMs);
+  const summary = r.firstPrompt ? clipForButton(r.firstPrompt) : '(无摘要)';
+  return `${summary} · ${ago}`;
+}
+
+function clipForButton(s: string): string {
+  // TG inline button text caps; keep some headroom for the time suffix.
+  return s.length > 40 ? s.slice(0, 39) + '…' : s;
 }
 
 function pickerLabel(action: string): string {

@@ -201,9 +201,6 @@ interface TgUpdate {
     chat: { id: number | string; type: string };
     from?: { id: number; username?: string; first_name?: string };
     text?: string;
-    /** Present when the user's message is a reply to another. Used to
-     *  detect replies to our /new force-reply prompt. */
-    reply_to_message?: { message_id: number };
   };
   callback_query?: {
     id: string;
@@ -270,8 +267,6 @@ async function handleFreeText(update: TgUpdate, env: Env): Promise<void> {
       text: msg.text,
       fromUsername: msg.from?.username,
       chatId: String(msg.chat.id),
-      // Used by /inbox-text to detect long-press replies to our /new prompt.
-      replyToMessageId: msg.reply_to_message?.message_id,
     }),
   });
 }

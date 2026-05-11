@@ -25,7 +25,9 @@ import {
  */
 
 export interface SessionSpawnOpts {
-  prompt: string;
+  /** Initial task. Empty/undefined means "blank employee" — Session waits for
+   *  the first chat message to start the first turn (no tokens burned). */
+  prompt?: string;
   name?: string;
   cwd?: string;
   model?: string;
@@ -135,8 +137,8 @@ export class Session {
 
   constructor(opts: SessionSpawnOpts, callbacks: SessionCallbacks) {
     this.id = randomId(8);
-    this.name = opts.name ?? slugFromPrompt(opts.prompt);
-    this.prompt = opts.prompt;
+    this.name = opts.name ?? slugFromPrompt(opts.prompt ?? '');
+    this.prompt = opts.prompt ?? '';
     this.cwd = opts.cwd;
     this.model = opts.model;
     this.startedAt = Date.now();
@@ -161,10 +163,14 @@ export class Session {
 
   /** Begin the SDK query and start the consumer loop. Resolves immediately. */
   start(): void {
-    // First user message goes into the stream BEFORE we start the query.
-    // We don't have the Claude session_id yet — pass empty and the SDK will
-    // fill it in on the `system.init` it emits back.
-    this.inputStream.push(this.opts.prompt, '');
+    // If we have an initial prompt, push it BEFORE starting the query so
+    // the first turn fires immediately. If it's empty (the "blank employee"
+    // case: user did /new with no task and will send one in the next chat
+    // message), don't push anything — query() just waits on the stream and
+    // the first `sendMessage()` will kick off the first turn.
+    if (this.opts.prompt && this.opts.prompt.trim().length > 0) {
+      this.inputStream.push(this.opts.prompt, '');
+    }
     const options: Record<string, unknown> = {
       cwd: this.opts.cwd,
       model: this.opts.model,

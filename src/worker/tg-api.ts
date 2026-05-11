@@ -24,12 +24,6 @@ export interface SendOptions {
   silent?: boolean;
   keyboard?: InlineKeyboard;
   parseMode?: 'Markdown' | 'MarkdownV2' | 'HTML';
-  /**
-   * Send with `force_reply: true` — Telegram pops a reply UI under the
-   * message so the user's next send is implicitly a reply to it. We use this
-   * to make bare /new ask "what task?" without inventing a new mode.
-   */
-  forceReply?: boolean;
 }
 
 export interface BotMe {
@@ -61,7 +55,6 @@ export class TgApi {
     };
     if (opts.parseMode) body.parse_mode = opts.parseMode;
     if (opts.keyboard) body.reply_markup = { inline_keyboard: opts.keyboard };
-    else if (opts.forceReply) body.reply_markup = { force_reply: true, selective: true };
     const msg = await this.call<{ message_id: number }>('sendMessage', body);
     return msg.message_id;
   }

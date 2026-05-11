@@ -225,6 +225,12 @@ export async function runDaemon(): Promise<void> {
       case 'list_sessions':
         broadcastSnapshot();
         return;
+      case 'request_resumable':
+        relay.send({
+          type: 'resumable_list',
+          resumable: manager.listResumable(process.env.HOME ?? process.cwd()),
+        });
+        return;
       case 'ping':
         relay.send({ type: 'pong', id: msg.id });
         return;

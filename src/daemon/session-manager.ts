@@ -2,8 +2,14 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { log } from '../shared/logger';
-import { SessionSummary } from '../shared/protocol';
+import { ResumableEntry, SessionSummary } from '../shared/protocol';
 import { Session, SessionCallbacks, SessionSpawnOpts } from './sdk-session';
+
+/** Number format helper: 1 → "一号", 2 → "二号", … 10 → "十号", 11+ → "11号". */
+const EMPLOYEE_ZH = ['', '一号', '二号', '三号', '四号', '五号', '六号', '七号', '八号', '九号', '十号'];
+function employeeName(n: number): string {
+  return `员工${n <= 10 ? EMPLOYEE_ZH[n] : `${n}号`}`;
+}
 
 /**
  * Tracks all live SDK sessions, the "current" one for free-text routing, and
@@ -25,12 +31,71 @@ export class SessionManager {
   constructor(private readonly callbacks: SessionCallbacks) {}
 
   spawn(opts: SessionSpawnOpts): Session {
-    const session = new Session(opts, this.wrapCallbacks());
+    // Auto-name fresh "empty" sessions as 员工一号 / 员工二号 / ... so the user
+    // doesn't have to think one up. Only applies when both name and prompt
+    // are empty (i.e., the worker is asking for a blank employee to wait
+    // for the first task).
+    let name = opts.name;
+    if (!name && !opts.prompt?.trim()) {
+      name = employeeName(this.sessions.size + 1);
+    }
+    const session = new Session({ ...opts, name }, this.wrapCallbacks());
     this.sessions.set(session.id, session);
     this.currentId = session.id;
     log.info(`spawned session ${session.id} (name=${session.name})`);
     session.start();
     return session;
+  }
+
+  /**
+   * Scan ~/.claude/projects/<encoded-cwd>/*.jsonl for sessions the SDK
+   * could `--resume`. Reads the first user message of each file so we can
+   * label it in the picker. Best-effort; on errors returns whatever we got.
+   */
+  listResumable(cwd?: string): ResumableEntry[] {
+    const projectsDir = path.join(os.homedir(), '.claude', 'projects');
+    if (!fs.existsSync(projectsDir)) return [];
+    const encoded = (cwd ?? process.env.HOME ?? '').replace(/\//g, '-');
+    const candidates: string[] = [];
+    // Prefer the canonical cwd directory; fall back to all subdirs.
+    const primary = path.join(projectsDir, encoded);
+    if (encoded && fs.existsSync(primary)) {
+      candidates.push(primary);
+    } else {
+      try {
+        for (const entry of fs.readdirSync(projectsDir)) {
+          candidates.push(path.join(projectsDir, entry));
+        }
+      } catch {
+        return [];
+      }
+    }
+    const out: ResumableEntry[] = [];
+    for (const dir of candidates) {
+      let files: string[];
+      try {
+        files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl'));
+      } catch {
+        continue;
+      }
+      for (const f of files) {
+        const full = path.join(dir, f);
+        const claudeSessionId = f.replace(/\.jsonl$/, '');
+        if (!/^[A-Za-z0-9_-]{8,}$/.test(claudeSessionId)) continue;
+        // Skip sessions the daemon already has in memory — those go through
+        // the normal "live" sessions list.
+        if (this.claudeIdIndex.has(claudeSessionId)) continue;
+        let mtimeMs = 0;
+        try {
+          mtimeMs = fs.statSync(full).mtimeMs;
+        } catch {
+          continue;
+        }
+        out.push({ claudeSessionId, mtimeMs, firstPrompt: extractFirstPrompt(full) });
+      }
+    }
+    out.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    return out;
   }
 
   /** Find by duckling id, name, or claudeSessionId. */
@@ -224,5 +289,51 @@ function deleteClaudeSessionFile(cwd: string | undefined, sessionId: string): vo
  */
 function isPlausibleSessionId(s: string): boolean {
   return typeof s === 'string' && s.length > 0 && s.length <= 64 && /^[A-Za-z0-9_-]+$/.test(s);
+}
+
+/**
+ * Sip just the first ~10 KB of a session jsonl and grab the first user
+ * message's text. Used to label resumable sessions in the picker so the
+ * user can recognise "what was I doing in this session?".
+ */
+function extractFirstPrompt(jsonlPath: string): string | undefined {
+  let chunk: string;
+  try {
+    const fd = fs.openSync(jsonlPath, 'r');
+    const buf = Buffer.alloc(10 * 1024);
+    const n = fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    chunk = buf.toString('utf8', 0, n);
+  } catch {
+    return undefined;
+  }
+  for (const line of chunk.split('\n')) {
+    if (!line.startsWith('{')) continue;
+    let obj: { type?: string; message?: { role?: string; content?: unknown } };
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (obj.type === 'user' && obj.message?.role === 'user') {
+      const content = obj.message.content;
+      let text = '';
+      if (typeof content === 'string') text = content;
+      else if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block && typeof block === 'object' && (block as { type?: string }).type === 'text') {
+            const t = (block as { text?: string }).text;
+            if (typeof t === 'string') {
+              text = t;
+              break;
+            }
+          }
+        }
+      }
+      text = text.trim().replace(/\s+/g, ' ');
+      if (text) return text.length > 80 ? text.slice(0, 77) + '…' : text;
+    }
+  }
+  return undefined;
 }
 

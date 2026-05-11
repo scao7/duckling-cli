@@ -51,6 +51,16 @@ export interface QuestionItem {
   multiSelect?: boolean;
 }
 
+/** A Claude session on disk that the daemon could `claude --resume` into. */
+export interface ResumableEntry {
+  /** The Claude SDK session id — file basename in ~/.claude/projects/.../ */
+  claudeSessionId: string;
+  /** mtime of the jsonl file, used for "X minutes ago" labels. */
+  mtimeMs: number;
+  /** First user prompt from the transcript, truncated. Empty if unreadable. */
+  firstPrompt?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Daemon → Relay
 // ---------------------------------------------------------------------------
@@ -133,6 +143,12 @@ export type DaemonToRelay =
       sessionId: string;
     }
   | {
+      // Reply to a `request_resumable`. List of Claude sessions on disk
+      // (jsonl files in ~/.claude/projects/<cwd>/), newest first.
+      type: 'resumable_list';
+      resumable: ResumableEntry[];
+    }
+  | {
       // Out-of-band note for the user (e.g. "no live session — /new first").
       // Rendered as a plain TG message; not tied to a session.
       type: 'notice';
@@ -210,6 +226,11 @@ export type RelayToDaemon =
   | {
       // /sessions — daemon will reply with a `sessions_snapshot` event.
       type: 'list_sessions';
+    }
+  | {
+      // /new (no args) — daemon will reply with a `resumable_list` event so
+      // the worker can offer the user a "resume which one, or fresh?" picker.
+      type: 'request_resumable';
     }
   | { type: 'ping'; id: string }
   | { type: 'error'; message: string; fatal?: boolean };
