@@ -8,6 +8,14 @@ import { RelayToDaemon } from '../shared/protocol';
 import { RelayClient } from './relay-client';
 import { SessionManager } from './session-manager';
 
+const pkgVersion = (): string => {
+  try {
+    return require('../../package.json').version as string;
+  } catch {
+    return '0.0.0';
+  }
+};
+
 /**
  * duckling daemon — Claude Agent SDK orchestrator + Telegram bridge.
  *
@@ -90,7 +98,7 @@ export async function runDaemon(): Promise<void> {
       type: 'hello',
       deviceName: cfg.deviceName,
       os: `${process.platform}-${os.release()}`,
-      version: '0.1.0',
+      version: pkgVersion(),
     });
   });
 
@@ -128,12 +136,20 @@ export async function runDaemon(): Promise<void> {
             cwd: existing.cwd,
             model: existing.model,
           });
-        } else {
-          // Treat idOrName as a claude session id directly (covers cross-daemon resume).
+        } else if (/^[A-Za-z0-9_-]{8,64}$/.test(msg.idOrName)) {
+          // No record matches — treat the argument as a raw Claude session id
+          // (covers cross-daemon resume). Strict regex guards against path
+          // characters slipping into the SDK's resume option.
           manager.spawn({
             prompt: '(resumed)',
             resumeClaudeSessionId: msg.idOrName,
             forkSession: msg.fork === true,
+          });
+        } else {
+          log.warn(`resume: nothing matches ${msg.idOrName} and id is malformed`);
+          relay.send({
+            type: 'notice',
+            text: `没找到 session <code>${msg.idOrName.replace(/[&<>]/g, '?')}</code>。试试 <code>/sessions</code> 看看有哪些。`,
           });
         }
         return;

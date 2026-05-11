@@ -8,6 +8,17 @@ import { runStatus } from './status';
 import { runStop } from './stop';
 import { runUninstallHooks } from './uninstall-hooks';
 
+// Read version from package.json — single source of truth, can't drift.
+// The package.json sits two levels up from dist/cli/index.js, so use a
+// resolution that works both in dist (compiled) and src (ts-node).
+const pkgVersion = (() => {
+  try {
+    return require('../../package.json').version as string;
+  } catch {
+    return '0.0.0';
+  }
+})();
+
 async function main(): Promise<void> {
   const showBanner =
     process.argv.length <= 2 ||
@@ -23,7 +34,7 @@ async function main(): Promise<void> {
   program
     .name('duckling')
     .description('Claude Code over Telegram. Runs the Agent SDK in a daemon; bridges to TG.')
-    .version('0.2.0')
+    .version(pkgVersion)
     .showHelpAfterError();
 
   program

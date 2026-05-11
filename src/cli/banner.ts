@@ -65,7 +65,7 @@ export function bannerWithTagline(tagline?: string): string {
     ? `${BOLD}🦆 d u c k l i n g${RESET}`
     : '🦆 d u c k l i n g';
   const sub = supportsColor()
-    ? `${DIM}${C_TEXT}${tagline ?? 'Claude Code on Telegram · pty-wrapped'}${RESET}`
-    : tagline ?? 'Claude Code on Telegram · pty-wrapped';
+    ? `${DIM}${C_TEXT}${tagline ?? 'Claude Code on Telegram'}${RESET}`
+    : tagline ?? 'Claude Code on Telegram';
   return [...lines, '', `        ${title}        ${sub}`, ''].join('\n');
 }

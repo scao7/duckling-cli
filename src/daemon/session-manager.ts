@@ -231,13 +231,26 @@ export class SessionManager {
  * file named `<sessionId>.jsonl` and rm whatever we find.
  */
 function deleteClaudeSessionFile(cwd: string | undefined, sessionId: string): void {
-  const projectsDir = path.join(os.homedir(), '.claude', 'projects');
+  // Defense in depth: refuse anything that doesn't look like a session id.
+  // Real values are UUIDs (36 chars, hex + dashes) from the SDK; a malformed
+  // id would let `fname` escape projectsDir via "../" segments.
+  if (!isPlausibleSessionId(sessionId)) {
+    log.warn(`forget: refusing to delete file for suspicious sessionId: ${sessionId}`);
+    return;
+  }
+  const projectsDir = path.resolve(path.join(os.homedir(), '.claude', 'projects'));
   if (!fs.existsSync(projectsDir)) return;
   const fname = `${sessionId}.jsonl`;
   let removed = 0;
   const tryRm = (p: string): void => {
+    // Final containment check — never unlink anything that resolves outside projectsDir.
+    const resolved = path.resolve(p);
+    if (!resolved.startsWith(projectsDir + path.sep)) {
+      log.warn(`forget: refusing unlink outside projects dir: ${resolved}`);
+      return;
+    }
     try {
-      fs.unlinkSync(p);
+      fs.unlinkSync(resolved);
       removed++;
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code;
@@ -255,6 +268,15 @@ function deleteClaudeSessionFile(cwd: string | undefined, sessionId: string): vo
     const candidate = path.join(projectsDir, entry, fname);
     if (fs.existsSync(candidate)) tryRm(candidate);
   }
+}
+
+/**
+ * Loose "looks like a session id" test — accepts UUIDs (Claude SDK) and
+ * duckling's short base64url ids. Anything with path separators, dots that
+ * could be `..`, or unicode is rejected.
+ */
+function isPlausibleSessionId(s: string): boolean {
+  return typeof s === 'string' && s.length > 0 && s.length <= 64 && /^[A-Za-z0-9_-]+$/.test(s);
 }
 
 function todayKey(): string {
