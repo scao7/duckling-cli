@@ -334,6 +334,9 @@ export class UserDO implements DurableObject {
     tool: string,
     input: unknown,
   ): Promise<void> {
+    // Re-arm the typing indicator — TG's `typing` only lasts ~5s, but SDK
+    // tool calls signal that more output is coming, so refresh it here.
+    void this.tg.sendChatAction(chatId);
     const rec = await this.storage.get<SessionRecord>(`ses:${sessionId}`);
     const preview = previewToolInput(tool, input);
     await this.safeSend(chatId, () =>
@@ -352,6 +355,8 @@ export class UserDO implements DurableObject {
     sessionId: string,
     todos: TodoItem[],
   ): Promise<void> {
+    // Plan updates mean the agent is actively iterating — re-arm typing.
+    void this.tg.sendChatAction(chatId);
     const rec = await this.storage.get<SessionRecord>(`ses:${sessionId}`);
     if (!rec) return;
     const body = renderPlan(rec.name, todos);
@@ -521,6 +526,8 @@ export class UserDO implements DurableObject {
               silent: true,
             })
             .catch(() => undefined);
+        } else {
+          void this.tg.sendChatAction(body.chatId);
         }
         return json(200, { ok: true, kind: 'question_answer' });
       }
@@ -542,6 +549,9 @@ export class UserDO implements DurableObject {
       } catch (e) {
         console.warn('no-daemon notice failed:', e);
       }
+    } else {
+      // SDK is about to think — show "…is typing" until the first event comes back.
+      void this.tg.sendChatAction(body.chatId);
     }
     return json(200, { ok: true, delivered });
   }
@@ -590,6 +600,10 @@ export class UserDO implements DurableObject {
       } catch {
         // Ignore — not worth retrying.
       }
+    } else if (sdkTriggering(parsed.msg.type)) {
+      // Commands that kick the SDK (new/resume/fork/chat/question_answer) —
+      // show typing until the first event comes back.
+      void this.tg.sendChatAction(body.chatId);
     }
     return json(200, { ok: true, delivered });
   }
@@ -673,6 +687,7 @@ export class UserDO implements DurableObject {
         answers: [choice],
       };
       const delivered = this.broadcastToDaemons(msg);
+      if (delivered > 0) void this.tg.sendChatAction(body.chatId);
       return json(200, { ok: true, delivered, choice });
     }
     // s:<sessionId>:<action>  — anchor button taps or picker selections
@@ -692,6 +707,7 @@ export class UserDO implements DurableObject {
       }
       if (action === 'resume') {
         const ok = this.broadcastToDaemons({ type: 'resume_session', idOrName: sessionId });
+        if (ok > 0) void this.tg.sendChatAction(body.chatId);
         return json(200, { ok: true, delivered: ok });
       }
       if (action === 'fork') {
@@ -700,6 +716,7 @@ export class UserDO implements DurableObject {
           idOrName: sessionId,
           fork: true,
         });
+        if (ok > 0) void this.tg.sendChatAction(body.chatId);
         return json(200, { ok: true, delivered: ok });
       }
       if (action === 'forget' || action === 'purge') {
@@ -880,6 +897,20 @@ function normalizeAction(action: string): string {
   if (action === 'use') return 'switch';
   if (action === 'purge') return 'forget';
   return action;
+}
+
+/**
+ * True for RelayToDaemon message types that will cause the SDK to think and
+ * eventually emit output back to TG. Used to gate the "…is typing" indicator
+ * — admin commands like /kill /status don't deserve the spinner.
+ */
+function sdkTriggering(type: RelayToDaemon['type']): boolean {
+  return (
+    type === 'chat' ||
+    type === 'new_session' ||
+    type === 'resume_session' ||
+    type === 'question_answer'
+  );
 }
 
 function renderAnchor(rec: SessionRecord, sessionId: string, isCurrent: boolean): string {
