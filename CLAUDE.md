@@ -259,3 +259,18 @@ Wanted: unit tests around `parseCommand`, `extractQuestions`, `MessageStream`, a
 3. **Agent SDK** (current) — drops pty entirely. The SDK exposes discrete events natively; we forward them. Smaller, cleaner, multi-session out of the box.
 
 If you're tempted to bring hooks back, re-read §1 ("we're just a relay") first.
+
+## 13. Future work
+
+### `duckling attach` — hand a terminal claude session to the bot
+
+Use case: the user is in an SSH terminal running `claude`, decides to step away, wants the bot to pick up that conversation from Telegram.
+
+Sketch:
+- New CLI: `duckling attach [<claudeSessionId>] [--pick]`. Default behaviour finds the most-recently-modified `~/.claude/projects/<encoded-cwd>/*.jsonl` for the current `cwd`.
+- Add a local IPC channel (the `DEFAULT_SOCKET_PATH = ~/.duckling.sock` slot in [`shared/paths.ts`](src/shared/paths.ts) already exists but is unused). Daemon listens on a Unix socket; CLI sends `{type:'attach', claudeSessionId, name?}`.
+- Daemon calls `manager.spawn({ resume: claudeSessionId, … })`. `Session.start()` needs to forward `resume` to the SDK's `query({ options: { resume } })`.
+- Naming: `attached-<short-claude-id>` so it's obvious in `/sessions`.
+- Safety: refuse to attach if a process is currently writing the jsonl (use `lsof` or a stale-mtime heuristic) — concurrent writers corrupt the transcript.
+
+Don't promote it as a "session takeover" feature — semantically it's "fork from this transcript into a new SDK process". The original SSH `claude` keeps its own state.

@@ -1,5 +1,15 @@
 # duckling
 
+```
+                                                              ____
+                                                          ___/    \__
+   __    __    __    __    __    __    __                /   o      \
+  (o>   (o>   (o>   (o>   (o>   (o>   (o>                \_         >
+   ~~    ~~    ~~    ~~    ~~    ~~    ~~                  \_______/
+                                                             ||  ||
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+```
+
 > **Drive Claude Code from Telegram.** Spawn Claude sessions, watch plans evolve, answer questions with one tap — all from your phone.
 
 [![npm version](https://img.shields.io/npm/v/duckling-cli.svg)](https://www.npmjs.com/package/duckling-cli)
@@ -211,6 +221,7 @@ npm run worker:deploy
 
 Things on the table, not yet shipped:
 
+- **`duckling attach`** — hand a `claude` session you started in an SSH terminal off to the bot, so the chat picks up that conversation's history.
 - **Multi-user on a single machine** — currently one daemon per Linux user (separate `~/.config/duckling/`).
 - **Reply-to-route** — let TG message-replies target a specific session without `/switch`.
 - **Auto-archive** — old sessions linger forever; add a TTL.

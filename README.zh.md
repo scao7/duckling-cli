@@ -1,5 +1,15 @@
 # duckling
 
+```
+                                                              ____
+                                                          ___/    \__
+   __    __    __    __    __    __    __                /   o      \
+  (o>   (o>   (o>   (o>   (o>   (o>   (o>                \_         >
+   ~~    ~~    ~~    ~~    ~~    ~~    ~~                  \_______/
+                                                             ||  ||
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+```
+
 > **在 Telegram 上跑 Claude Code。** 开 session、看 plan 滚动、按按钮回答问题 —— 全程从手机上。
 
 [![npm version](https://img.shields.io/npm/v/duckling-cli.svg)](https://www.npmjs.com/package/duckling-cli)
@@ -211,6 +221,7 @@ npm run worker:deploy
 
 还没做的：
 
+- **`duckling attach`** —— 把你 SSH 终端里跑着的 `claude` session 交给 bot 接管，TG 那头继承同一段对话历史。
 - **单机多 TG 用户** —— 当前是每个 Linux 用户一个 daemon。
 - **回复定位 session** —— 让 TG 回复消息直接路由到对应 session，不用 `/switch`。
 - **自动归档** —— 老 session 不自动清理。

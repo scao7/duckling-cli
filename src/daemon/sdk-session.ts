@@ -67,22 +67,6 @@ class MessageStream implements AsyncIterable<SDKUserMessage> {
     this.wake();
   }
 
-  /** Push a tool_result back to the SDK — used to answer AskUserQuestion. */
-  pushToolResult(toolUseId: string, content: unknown, claudeSessionId: string): void {
-    this.queue.push({
-      type: 'user',
-      message: {
-        role: 'user',
-        content: [
-          { type: 'tool_result', tool_use_id: toolUseId, content: JSON.stringify(content) },
-        ],
-      },
-      parent_tool_use_id: null,
-      session_id: claudeSessionId || undefined,
-    });
-    this.wake();
-  }
-
   end(): void {
     this.done = true;
     this.wake();
@@ -133,9 +117,14 @@ export class Session {
   private queryHandle: ReturnType<typeof query> | null = null;
   private abortController = new AbortController();
   private currentTurnTextChunks: string[] = [];
-  /** Raw AskUserQuestion input keyed by tool_use id, kept so we can echo
-   *  it back in the tool_result the SDK schema expects. */
-  private pendingQuestions = new Map<string, unknown>();
+  /**
+   * Pending AskUserQuestion resolvers keyed by tool_use id. The SDK invokes
+   * our `canUseTool` callback when the model wants to ask the user; the
+   * callback parks a Promise here and returns it. Later, when the relay
+   * delivers the user's answer via `answerQuestion()`, we resolve the
+   * matching Promise so `canUseTool` returns `{ behavior: 'allow', ... }`.
+   */
+  private questionResolvers = new Map<string, (answers: string[]) => void>();
 
   constructor(opts: SessionSpawnOpts, callbacks: SessionCallbacks) {
     this.id = randomId(8);
@@ -180,6 +169,7 @@ export class Session {
       includePartialMessages: false,
       abortController: this.abortController,
       pathToClaudeCodeExecutable: resolveClaudeBinary(),
+      canUseTool: this.canUseTool.bind(this),
     };
     if (typeof this.opts.maxBudgetUsd === 'number' && this.opts.maxBudgetUsd > 0) {
       options.maxBudgetUsd = this.opts.maxBudgetUsd;
@@ -210,26 +200,75 @@ export class Session {
     this.status = 'running';
   }
 
-  /** Answer an AskUserQuestion the model is waiting on. */
+  /**
+   * Resolve the pending AskUserQuestion this id is parked on. Called by
+   * the daemon when the relay forwards the user's button tap / typed reply.
+   * No-op if nothing is parked (stale answer, double-answer, etc.) — log so
+   * we notice if that happens.
+   */
   answerQuestion(toolUseId: string, answers: string[]): void {
-    // AskUserQuestionOutput shape (per the SDK's tool schema):
-    //   { questions: [...echo of input...], answers: { [questionText]: chosen } }
-    // We kept the raw input on dispatch; rebuild the output now so the model
-    // doesn't read it as a cancellation.
-    const rawInput = this.pendingQuestions.get(toolUseId);
-    this.pendingQuestions.delete(toolUseId);
-    const qs = (rawInput as { questions?: unknown })?.questions;
-    const qArray = Array.isArray(qs) ? qs : [];
+    const resolver = this.questionResolvers.get(toolUseId);
+    if (!resolver) {
+      log.warn(`answerQuestion: no pending resolver for tool_use ${toolUseId}`);
+      return;
+    }
+    this.questionResolvers.delete(toolUseId);
+    resolver(answers);
+    this.status = 'running';
+  }
+
+  /**
+   * SDK permission callback. The SDK invokes this for **every** tool the
+   * model wants to use — that's where we hook AskUserQuestion to route to
+   * Telegram. For everything else we just allow (the daemon already runs
+   * with `bypassPermissions`; gating tools is Claude Code's job, not ours).
+   *
+   * For AskUserQuestion the SDK schema wants `{ questions, answers }` back
+   * as `updatedInput`. We park a Promise keyed by toolUseId and resolve it
+   * from `answerQuestion()` when the user replies in Telegram.
+   */
+  private async canUseTool(
+    toolName: string,
+    input: Record<string, unknown>,
+    opts: { signal: AbortSignal; toolUseID: string },
+  ): Promise<{ behavior: 'allow'; updatedInput?: Record<string, unknown> } | { behavior: 'deny'; message: string }> {
+    if (toolName !== 'AskUserQuestion') {
+      return { behavior: 'allow', updatedInput: input };
+    }
+    const toolUseId = opts.toolUseID;
+    const questions = extractQuestions(input);
+    this.status = 'waiting';
+    this.callbacks.onQuestion?.(this, toolUseId, questions);
+    let answers: string[];
+    try {
+      answers = await new Promise<string[]>((resolve, reject) => {
+        this.questionResolvers.set(toolUseId, resolve);
+        const onAbort = () => {
+          this.questionResolvers.delete(toolUseId);
+          reject(new Error('aborted'));
+        };
+        if (opts.signal.aborted) onAbort();
+        else opts.signal.addEventListener('abort', onAbort, { once: true });
+      });
+    } catch (e) {
+      return { behavior: 'deny', message: e instanceof Error ? e.message : String(e) };
+    }
+    // Build the answers map the AskUserQuestion tool schema expects:
+    //   { questions: [...echo...], answers: { [questionText]: chosenLabel } }
+    const qs = Array.isArray((input as { questions?: unknown }).questions)
+      ? ((input as { questions: unknown[] }).questions)
+      : [];
     const answersMap: Record<string, string> = {};
-    for (let i = 0; i < qArray.length; i++) {
-      const q = qArray[i] as { question?: string };
+    for (let i = 0; i < qs.length; i++) {
+      const q = qs[i] as { question?: string };
       if (q && typeof q.question === 'string') {
         answersMap[q.question] = answers[i] ?? '';
       }
     }
-    const output = { questions: qArray, answers: answersMap };
-    this.inputStream.pushToolResult(toolUseId, output, this.claudeSessionId ?? '');
-    this.status = 'running';
+    return {
+      behavior: 'allow',
+      updatedInput: { questions: qs, answers: answersMap },
+    };
   }
 
   /** Interrupt the current generation. Session stays open for more turns. */
@@ -317,10 +356,9 @@ export class Session {
             this.lastTodos = todos;
             this.callbacks.onPlanUpdate?.(this, todos);
           } else if (b.name === 'AskUserQuestion') {
-            const questions = extractQuestions(b.input);
-            this.status = 'waiting';
-            this.pendingQuestions.set(toolUseId, b.input);
-            this.callbacks.onQuestion?.(this, toolUseId, questions);
+            // Handled in `canUseTool` — that's where we park the Promise and
+            // route the question to Telegram. The SDK calls our callback
+            // before completing the tool_use, so we don't need to react here.
           } else {
             this.callbacks.onToolUse?.(this, b.name, b.input, toolUseId);
           }

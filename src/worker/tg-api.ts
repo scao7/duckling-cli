@@ -85,23 +85,6 @@ export class TgApi {
     await this.call<boolean>('answerCallbackQuery', body);
   }
 
-  /**
-   * Show the "…is typing" indicator in the chat for ~5 seconds. Any actual
-   * sendMessage cancels it implicitly, so we just fire-and-forget at the
-   * points where we know the SDK is about to produce output. Cosmetic-only:
-   * swallow errors so a flaky typing call never breaks the surrounding flow.
-   */
-  async sendChatAction(
-    chatId: string,
-    action: 'typing' | 'upload_photo' | 'upload_document' = 'typing',
-  ): Promise<void> {
-    try {
-      await this.call<boolean>('sendChatAction', { chat_id: chatId, action });
-    } catch (e) {
-      console.warn('sendChatAction failed:', e instanceof Error ? e.message : e);
-    }
-  }
-
   async setWebhook(url: string, secretToken?: string): Promise<void> {
     const body: Record<string, unknown> = {
       url,

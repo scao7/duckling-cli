@@ -51,19 +51,7 @@ interface WsAttachment {
   deviceName: string;
 }
 
-interface TypingState {
-  chatId: string;
-  /** Outstanding SDK turns. Typing stops once this hits 0. */
-  count: number;
-  /** Hard safety cap — if no session_done arrives by then, give up. */
-  until: number;
-}
-
 const TG_MAX_LEN = 4000;
-/** Re-fire typing this often. TG's indicator lives ~5s; 4s gives margin. */
-const TYPING_TICK_MS = 4000;
-/** Safety cap on a single turn so a broken daemon doesn't spin forever. */
-const TYPING_MAX_MS = 5 * 60 * 1000;
 
 export class UserDO implements DurableObject {
   private storage: DurableObjectStorage;
@@ -104,63 +92,14 @@ export class UserDO implements DurableObject {
     }
   }
 
-  // -------- "…is typing" loop ----------
-  //
-  // TG's sendChatAction shows the indicator for ~5s, so to keep it visible
-  // throughout an SDK turn we tick on a DO alarm every 4s. State lives in
-  // storage so the loop survives DO hibernation between alarms.
-  //
-  // count: outstanding SDK turns (so two overlapping /new commands don't
-  //   prematurely stop typing when only one of them finishes).
-  // until: hard safety cap — if a daemon crashes and never sends session_done,
-  //   the alarm gives up after this timestamp regardless of count.
-
+  /**
+   * Pre-2026-05-11 builds scheduled DO alarms for a typing-indicator loop.
+   * That loop is gone; after deploy each existing DO will fire its scheduled
+   * alarm once into this no-op handler. We also clear the stale `typing` key
+   * so storage doesn't carry dead state forever.
+   */
   async alarm(): Promise<void> {
-    const t = await this.storage.get<TypingState>('typing');
-    if (!t) return;
-    if (Date.now() > t.until || t.count <= 0) {
-      await this.storage.delete('typing');
-      return;
-    }
-    void this.tg.sendChatAction(t.chatId);
-    await this.state.storage.setAlarm(Date.now() + TYPING_TICK_MS);
-  }
-
-  private async startTyping(chatId: string): Promise<void> {
-    const existing = await this.storage.get<TypingState>('typing');
-    const safetyUntil = Date.now() + TYPING_MAX_MS;
-    if (existing) {
-      // Another turn is already in flight — just bump the counter and refresh
-      // the safety cap. The existing alarm keeps ticking.
-      await this.storage.put<TypingState>('typing', {
-        chatId,
-        count: existing.count + 1,
-        until: Math.max(existing.until, safetyUntil),
-      });
-      return;
-    }
-    await this.storage.put<TypingState>('typing', {
-      chatId,
-      count: 1,
-      until: safetyUntil,
-    });
-    void this.tg.sendChatAction(chatId);
-    await this.state.storage.setAlarm(Date.now() + TYPING_TICK_MS);
-  }
-
-  private async stopTyping(): Promise<void> {
-    const existing = await this.storage.get<TypingState>('typing');
-    if (!existing) return;
-    if (existing.count <= 1) {
-      await this.storage.delete('typing');
-      // Leave the alarm scheduled — when it fires it'll see no state and
-      // exit cleanly. Cheaper than a deleteAlarm storage call.
-      return;
-    }
-    await this.storage.put<TypingState>('typing', {
-      ...existing,
-      count: existing.count - 1,
-    });
+    await this.storage.delete('typing');
   }
 
   // -------- device records --------
@@ -451,8 +390,6 @@ export class UserDO implements DurableObject {
     toolUseId: string,
     questions: QuestionItem[],
   ): Promise<void> {
-    // Bot is waiting on the user — not "thinking" — so stop typing.
-    await this.stopTyping();
     const rec = await this.storage.get<SessionRecord>(`ses:${sessionId}`);
     const sesName = rec?.name ?? sessionId;
     if (questions.length === 0) return;
@@ -506,8 +443,6 @@ export class UserDO implements DurableObject {
     sessionId: string,
     msg: Extract<DaemonToRelay, { type: 'session_done' }>,
   ): Promise<void> {
-    // SDK turn finished — decrement the typing counter; stops on last turn.
-    await this.stopTyping();
     const rec = await this.storage.get<SessionRecord>(`ses:${sessionId}`);
     const name = rec?.name ?? sessionId;
     const icon = msg.status === 'completed' ? '✅' : msg.status === 'killed' ? '🛑' : '❌';
@@ -596,8 +531,6 @@ export class UserDO implements DurableObject {
               silent: true,
             })
             .catch(() => undefined);
-        } else {
-          await this.startTyping(body.chatId);
         }
         return json(200, { ok: true, kind: 'question_answer' });
       }
@@ -619,8 +552,6 @@ export class UserDO implements DurableObject {
       } catch (e) {
         console.warn('no-daemon notice failed:', e);
       }
-    } else {
-      await this.startTyping(body.chatId);
     }
     return json(200, { ok: true, delivered });
   }
@@ -669,8 +600,6 @@ export class UserDO implements DurableObject {
       } catch {
         // Ignore — not worth retrying.
       }
-    } else if (sdkTriggering(parsed.msg.type)) {
-      await this.startTyping(body.chatId);
     }
     return json(200, { ok: true, delivered });
   }
@@ -754,7 +683,6 @@ export class UserDO implements DurableObject {
         answers: [choice],
       };
       const delivered = this.broadcastToDaemons(msg);
-      if (delivered > 0) await this.startTyping(body.chatId);
       return json(200, { ok: true, delivered, choice });
     }
     // s:<sessionId>:<action>  — anchor button taps or picker selections
@@ -774,7 +702,6 @@ export class UserDO implements DurableObject {
       }
       if (action === 'resume') {
         const ok = this.broadcastToDaemons({ type: 'resume_session', idOrName: sessionId });
-        if (ok > 0) await this.startTyping(body.chatId);
         return json(200, { ok: true, delivered: ok });
       }
       if (action === 'fork') {
@@ -783,7 +710,6 @@ export class UserDO implements DurableObject {
           idOrName: sessionId,
           fork: true,
         });
-        if (ok > 0) await this.startTyping(body.chatId);
         return json(200, { ok: true, delivered: ok });
       }
       if (action === 'forget' || action === 'purge') {
@@ -964,21 +890,6 @@ function normalizeAction(action: string): string {
   if (action === 'use') return 'switch';
   if (action === 'purge') return 'forget';
   return action;
-}
-
-/**
- * True for RelayToDaemon message types that will cause the SDK to think and
- * eventually emit output back to TG. Used to gate the typing loop — admin
- * commands (/kill /status /forget …) don't trigger any SDK work and shouldn't
- * make the bot look like it's typing.
- */
-function sdkTriggering(type: RelayToDaemon['type']): boolean {
-  return (
-    type === 'chat' ||
-    type === 'new_session' ||
-    type === 'resume_session' ||
-    type === 'question_answer'
-  );
 }
 
 function renderAnchor(rec: SessionRecord, sessionId: string, isCurrent: boolean): string {
