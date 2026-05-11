@@ -21,17 +21,20 @@ const C_BILL = `${ESC}38;5;208m`; // bill-orange
 const C_WATER = `${ESC}38;5;39m`; // water-blue
 const C_TEXT = `${ESC}38;5;180m`; // muted tan for tagline
 
-// Big mama duck on the right (leading), seven ducklings trailing behind.
+// Side view: big mama duck on the right (leading), a row of ducklings
+// trailing behind on the left. All face the same direction (right), so the
+// parade reads as one cohesive scene. Water underneath, river along the bottom.
 //
 // We assemble the banner from raw ASCII (no color codes), then re-tokenize
 // to color the pieces. This keeps the alignment math sane and lets us toggle
 // color off easily.
 const RAW_LINES: string[] = [
-  '                                                                ___           ',
-  '                                                               /   \\__        ',
-  '   __    __    __    __    __    __    __                     | o .  >        ',
-  '  (o<)  (o<)  (o<)  (o<)  (o<)  (o<)  (o<)                     \\____/         ',
-  '   ~~    ~~    ~~    ~~    ~~    ~~    ~~                       ||            ',
+  '                                                              ____            ',
+  '                                                          ___/    \\__         ',
+  '   __    __    __    __    __    __    __                /   o      \\        ',
+  '  (o>   (o>   (o>   (o>   (o>   (o>   (o>                \\_         >        ',
+  '   ~~    ~~    ~~    ~~    ~~    ~~    ~~                  \\_______/         ',
+  '                                                             ||  ||           ',
   '~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~',
 ];
 
@@ -43,16 +46,15 @@ function supportsColor(): boolean {
 
 function colorize(line: string): string {
   if (!supportsColor()) return line;
+  // Tokenize by character class so the colors stay consistent regardless of
+  // tiny art tweaks. Order matters: water first (so `~` doesn't get matched
+  // by the body class), then eyes/beaks, then body outlines.
   return line
-    // Tildes (water) → blue
     .replace(/~+/g, (m) => `${C_WATER}${m}${RESET}`)
-    // Duckling bodies "(o<)" → yellow with orange beak
-    .replace(/\(o<\)/g, `${C_BODY}(${C_BILL}o<${C_BODY})${RESET}`)
-    // Mama duck pieces — color the bill ">" and the body separately
-    .replace(/\| o \.  >/g, `${C_BODY}| ${C_BILL}o${C_BODY} . ${C_BILL} >${RESET}`)
-    .replace(/(\/   \\__)/g, `${C_BODY}$1${RESET}`)
-    .replace(/(\\____\/)/g, `${C_BODY}$1${RESET}`)
-    .replace(/(___)(\s+)$/g, `${C_BODY}$1${RESET}$2`);
+    // Eyes (`o`) and beaks (`>`) — the bright bits.
+    .replace(/[o>]/g, (m) => `${C_BILL}${m}${RESET}`)
+    // Body outlines — slashes, underscores, pipes, parens.
+    .replace(/[/\\_|()]+/g, (m) => `${C_BODY}${m}${RESET}`);
 }
 
 export function bannerLines(): string[] {
