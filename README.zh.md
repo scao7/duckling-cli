@@ -18,6 +18,14 @@
 
 [English](README.md) · **中文**
 
+```bash
+npm i -g duckling-cli   # 安装
+duckling setup          # 扫码配对 @DucklingCli_Bot
+duckling start          # 起 daemon → 在 TG 里跟 bot 聊
+```
+
+已发布到 npm：**[`duckling-cli`](https://www.npmjs.com/package/duckling-cli)**。要求 Node 18.17+，且本地装好 `claude`（用你已有的 OAuth，不用额外 API key）。
+
 ---
 
 duckling 是一个小巧的 daemon，在你的电脑上跑官方的 [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript)，把它接到 Telegram。手机上发 prompt → Claude 在电脑上干活 → 结果、计划、问题以离散消息流回聊天，问题直接点按钮回答。
