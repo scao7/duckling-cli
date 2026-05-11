@@ -51,15 +51,21 @@ There are two ways to use duckling. **Pick one.**
 You pair with our hosted bot ([@DucklingCli_Bot](https://t.me/DucklingCli_Bot)) and our Cloudflare Worker. **Zero infra setup on your side.**
 
 ```bash
-npm i -g duckling-cli && duckling setup && duckling start
+npm i -g duckling-cli           # one-time install
+duckling setup                  # one-time pairing (QR + Telegram tap)
+cd /path/to/your/project        # ← run duckling start from here
+duckling start                  # daemon picks up THIS dir as its cwd
 ```
 
 What happens:
 1. `npm i -g duckling-cli` installs the CLI globally.
 2. `duckling setup` prints a QR + a `https://t.me/DucklingCli_Bot?start=…` link. Scan/click → tap **Start** in Telegram → paired. Config writes to `~/.config/duckling/config.json`.
-3. `duckling start` brings up the daemon, which connects to our shared relay.
+3. `cd` into the project you want the daemon to work in. **This matters**: the daemon's working directory is what you've `cd`'d into when you ran `duckling start`. The Agent SDK spawns Claude sessions in that directory, and `/new`'s picker shows the same session pool your terminal `claude` has been using in that directory (`~/.claude/projects/<encoded-cwd>/`).
+4. `duckling start` brings up the daemon, which connects to our shared relay. It prints the cwd it locked onto, so you can sanity-check.
 
 You did **not** need a Cloudflare account, a Telegram bot, or any deploy step. Inference still runs on your own Claude OAuth locally — the relay only forwards control events, not model traffic.
+
+To switch projects: `duckling stop && cd /other/project && duckling start`.
 
 ### Path B — Run your own bot + Worker
 
@@ -99,24 +105,38 @@ Full recipe + cost calculator (spoiler: **$0** on Cloudflare's free tier for sma
 
 ### After setup — talk to the bot
 
-Send a task. Get a plan. Walk away. Wake up to a "done":
+Two ways to start a task:
+
+**One-shot:** type the whole task with the command.
 
 ```
 You:   /new refactor the auth middleware to use the new token format
-Bot:   📋 refactor-auth-middleware
+Bot:   📋 refactor-auth-middleware           ← appears + edits in place
        ⬜ Read existing middleware
        ⬜ Adapt to new token shape
        ⬜ Update tests
        ⬜ Run lint + tests
-       ...                                       ← edits in place as TODOs progress
 Bot:   ❓ refactor-auth-middleware · Token source
        Should I read tokens from headers only, or also cookies?
-       [ headers only ] [ headers + cookies ]    ← tap one
-       ...                                       ← (silent while it works)
+       [ headers only ] [ headers + cookies ]   ← tap one
+       …                                        ← silent while it works
 Bot:   ✅ refactor-auth-middleware · completed · 4m12s · $0.0341
 ```
 
-That's it. **Four message types ever**: plan, question, done, error. No "I'm now reading file X", no "Running npm test...", no anchor banners. The chat is for milestones, not chit-chat.
+**Tap-only:** just `/new` (no args). Bot shows a picker of sessions you already have on this machine — pick to resume, or tap "➕ 新员工" for a blank one:
+
+```
+You:   /new
+Bot:   🦆 派活给谁?选一个旧任务接着干,或者点 新员工 开个全新的。
+       [ refactor auth middleware · 12m ago  ]
+       [ write a quicksort        · 1h ago   ]
+       [ debug the login flow     · yesterday]
+       [ ➕ 新员工                            ]    ← tap = "员工一号" spawns
+```
+
+The resumable rows come straight from `~/.claude/projects/<your-cwd>/*.jsonl` — exactly the sessions your terminal `claude` has been working in. Pick one and it forks (won't pollute the original transcript); tap "新员工" and a blank session named `员工一号` (`员工二号`, etc.) is spawned, waiting for your next message to use as its first task.
+
+**Four message types ever**: plan, question, done, error. No "I'm now reading file X", no "Running npm test...", no anchor banners. The chat is for milestones, not chit-chat.
 
 ## What you can do
 
@@ -124,17 +144,17 @@ That's it. **Four message types ever**: plan, question, done, error. No "I'm now
 
 | Command | What it does |
 |---|---|
-| `/new <task>` | Hire a new "employee" — opens a Claude session with that task |
-| `/kill` | Stop the current task (or `/kill <name>`, or tap from a picker) |
+| `/new` | No args → picker (resume an existing session or spawn 新员工). With args (`/new <task>`) → spawn + start on that task right away. |
+| `/kill` | Stop a task. No args → picker of running sessions; with args (`/kill <name>`) → kill that one directly. |
 | `/help` | Three-line cheatsheet |
 
 That's the whole `/` menu. **Three commands.** Anything more would mean adding "things to fiddle with on your phone" — which is exactly what this tool refuses to do.
 
 ### Without typing commands
 
-- **Direct message** — anything you type without a leading `/` continues the current task ("look, also handle the case where the token is empty").
+- **Direct message** — once a session is current, anything you type without a leading `/` continues that task ("look, also handle the case where the token is empty"). If you used `/new` to spawn a blank 员工 with no task yet, your next message becomes its first task.
 - **One-tap decisions** — when Claude calls `AskUserQuestion`, options become inline buttons. No typing required.
-- **`/kill` with no args** — pops a tappable picker of running sessions. You never have to memorise names or IDs.
+- **Picker-everywhere** — both `/new` and `/kill` pop tappable lists when used without args. You never have to memorise session names or IDs.
 
 ### Design rules duckling lives by
 

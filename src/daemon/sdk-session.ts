@@ -205,7 +205,15 @@ export class Session {
 
   /** Send a follow-up user message. */
   sendMessage(text: string): void {
-    if (this.status !== 'running' && this.status !== 'waiting') {
+    // 'starting' is allowed because the "blank employee" spawn path (empty
+    // initial prompt) leaves the SDK query waiting on an empty input stream —
+    // we never reach system.init until the first chat lands. Reject only on
+    // terminal states.
+    if (
+      this.status === 'completed' ||
+      this.status === 'failed' ||
+      this.status === 'killed'
+    ) {
       log.warn(`sendMessage on session ${this.id} (status=${this.status}) — ignored`);
       return;
     }

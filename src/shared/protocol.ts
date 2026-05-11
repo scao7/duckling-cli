@@ -120,6 +120,15 @@ export type DaemonToRelay =
     }
   | {
       // Session reached the end of a turn or terminated.
+      //
+      // Two render modes on the worker side, selected by `didWork`:
+      //   - didWork=true  → ✅ summary footer (name · time · cost), optionally
+      //                     followed by finalText snippet
+      //   - didWork=false → just send finalText as a plain chat reply (no
+      //                     footer). Pure conversational turns ("who are
+      //                     you?") need to surface a response; tool-running
+      //                     turns get the milestone footer instead.
+      // Errors/kills set status accordingly and rely on errorMessage.
       type: 'session_done';
       sessionId: string;
       status: 'completed' | 'failed' | 'killed';
@@ -127,6 +136,7 @@ export type DaemonToRelay =
       durationMs: number;
       numTurns: number;
       finalText?: string;
+      didWork?: boolean;
       errorMessage?: string;
     }
   | {

@@ -44,6 +44,8 @@ interface QuestionCtx {
   toolUseId: string;
   questions: QuestionItem[];
   createdAt: number;
+  /** message_id of the ❓ TG message — used to edit-in-place on button tap. */
+  questionMessageId?: number;
 }
 
 interface WsAttachment {
@@ -378,21 +380,24 @@ export class UserDO implements DurableObject {
     const single = questions[0];
     if (questions.length === 1 && single.options && single.options.length > 0 && !single.multiSelect) {
       const short = shortId();
-      const ctx: QuestionCtx = { sessionId, toolUseId, questions, createdAt: Date.now() };
-      await this.storage.put(`qctx:${short}`, ctx);
       const keyboard: InlineKeyboard = single.options.map((opt, i) => [
         {
           text: opt.length > 40 ? opt.slice(0, 37) + '…' : opt,
           callback_data: `q:${short}:0:${i}`,
         },
       ]);
-      await this.safeSend(chatId, () =>
-        this.tg.sendMessage(
+      let questionMessageId: number | undefined;
+      try {
+        questionMessageId = await this.tg.sendMessage(
           chatId,
           `❓ <b>${esc(sesName)}</b>${single.header ? ` · ${esc(single.header)}` : ''}\n${esc(single.question)}`,
           { parseMode: 'HTML', keyboard, silent: true },
-        ),
-      );
+        );
+      } catch (e) {
+        console.warn('TG question send failed:', e instanceof Error ? e.message : e);
+      }
+      const ctx: QuestionCtx = { sessionId, toolUseId, questions, createdAt: Date.now(), questionMessageId };
+      await this.storage.put(`qctx:${short}`, ctx);
       return;
     }
 
@@ -425,19 +430,64 @@ export class UserDO implements DurableObject {
   ): Promise<void> {
     const rec = await this.storage.get<SessionRecord>(`ses:${sessionId}`);
     const name = rec?.name ?? sessionId;
-    const icon = msg.status === 'completed' ? '✅' : msg.status === 'killed' ? '🛑' : '❌';
-    const cost = msg.costUsd > 0 ? ` · $${msg.costUsd.toFixed(4)}` : '';
-    const dur = formatMs(msg.durationMs);
-    let body = `${icon} <b>${esc(name)}</b> ${esc(msg.status)} · ${dur}${cost}`;
-    if (msg.errorMessage) body += `\n<i>${esc(msg.errorMessage)}</i>`;
-    await this.safeSend(chatId, () =>
-      this.tg.sendMessage(chatId, body, { parseMode: 'HTML', silent: true }),
-    );
+    const finalText = (msg.finalText ?? '').trim();
+    const failed = msg.status !== 'completed';
+
+    if (failed) {
+      // Error / killed → show a one-line status with the error if we have it.
+      const icon = msg.status === 'killed' ? '🛑' : '❌';
+      let body = `${icon} <b>${esc(name)}</b> ${esc(msg.status)}`;
+      if (msg.errorMessage) body += `\n<i>${esc(msg.errorMessage)}</i>`;
+      await this.safeSend(chatId, () =>
+        this.tg.sendMessage(chatId, body, { parseMode: 'HTML', silent: true }),
+      );
+    } else if (msg.didWork) {
+      // The turn invoked tools / had a plan → render the milestone footer
+      // (plus a short snippet of the reply if Claude said something).
+      const cost = msg.costUsd > 0 ? ` · $${msg.costUsd.toFixed(4)}` : '';
+      const dur = formatMs(msg.durationMs);
+      let body = `✅ <b>${esc(name)}</b> · ${dur}${cost}`;
+      if (finalText) {
+        const snip = finalText.length > 600 ? finalText.slice(0, 600) + '…' : finalText;
+        body += `\n\n${esc(snip)}`;
+      }
+      await this.safeSend(chatId, () =>
+        this.tg.sendMessage(chatId, body, { parseMode: 'HTML', silent: true }),
+      );
+    } else if (finalText) {
+      // Pure conversational turn — no plan, no tool use — just Claude
+      // answering the user. Send the text as a normal chat reply, no
+      // milestone footer. (If finalText is empty too, send nothing.)
+      const head = `<b>${esc(name)}</b>`;
+      const snip = finalText.length > 3500 ? finalText.slice(0, 3500) + '…' : finalText;
+      await this.safeSend(chatId, () =>
+        this.tg.sendMessage(chatId, `${head}\n${esc(snip)}`, {
+          parseMode: 'HTML',
+          silent: true,
+        }),
+      );
+    }
+
     if (rec) {
-      rec.status = msg.status;
-      await this.storage.put(`ses:${sessionId}`, rec);
-      // Redraw the anchor so its buttons disappear and its status updates.
+      // Multi-turn: keep status='running' so future chats route to this
+      // session. session_done only marks status='completed'/'failed'/'killed'
+      // on actual termination, not per-turn.
+      if (failed) {
+        rec.status = msg.status;
+        await this.storage.put(`ses:${sessionId}`, rec);
+      }
       await this.refreshAnchor(chatId, sessionId, false);
+    }
+    // Clear the "received, working" reaction we set when the user sent the
+    // message — the turn just finished, the user has visible output now.
+    const pending = await this.storage.get<{ chatId: string; messageId: number }>(
+      'pendingChatReaction',
+    );
+    if (pending) {
+      await this.storage.delete('pendingChatReaction');
+      await this.tg
+        .setMessageReaction(pending.chatId, pending.messageId, null)
+        .catch(() => undefined);
     }
   }
 
@@ -470,6 +520,7 @@ export class UserDO implements DurableObject {
       text: string;
       fromUsername?: string;
       chatId: string;
+      messageId?: number;
     };
     // If there's a pending multi-question, treat this reply as the answer.
     const pendingShort = await this.storage.get<string>('pendingQ');
@@ -516,6 +567,27 @@ export class UserDO implements DurableObject {
       } catch (e) {
         console.warn('no-daemon notice failed:', e);
       }
+      return json(200, { ok: true, delivered });
+    }
+    // React 👀 on the user's message so they see "received, working". The
+    // reaction stays until session_done arrives (see onSessionDone). If a
+    // previous reaction is still pending (multi-message turn) we replace it.
+    if (body.messageId !== undefined) {
+      const prev = await this.storage.get<{ chatId: string; messageId: number }>(
+        'pendingChatReaction',
+      );
+      if (prev && prev.messageId !== body.messageId) {
+        await this.tg
+          .setMessageReaction(prev.chatId, prev.messageId, null)
+          .catch(() => undefined);
+      }
+      await this.tg
+        .setMessageReaction(body.chatId, body.messageId, '👀')
+        .catch(() => undefined);
+      await this.storage.put('pendingChatReaction', {
+        chatId: body.chatId,
+        messageId: body.messageId,
+      });
     }
     return json(200, { ok: true, delivered });
   }
@@ -677,6 +749,25 @@ export class UserDO implements DurableObject {
         answers: [choice],
       };
       const delivered = this.broadcastToDaemons(msg);
+      // Edit the ❓ message in-place to confirm the pick + remove buttons.
+      // Without this the user sees no signal between tap and Claude's reply.
+      if (ctx.questionMessageId) {
+        const rec = await this.storage.get<SessionRecord>(`ses:${ctx.sessionId}`);
+        const sesName = rec?.name ?? ctx.sessionId;
+        const header = q.header ? ` · ${esc(q.header)}` : '';
+        await this.tg
+          .editMessage(
+            body.chatId,
+            ctx.questionMessageId,
+            `❓ <b>${esc(sesName)}</b>${header}\n${esc(q.question)}\n\n✓ <i>${esc(choice)}</i>`,
+            { parseMode: 'HTML' },
+          )
+          .catch(() => undefined);
+      }
+      // The user just acknowledged a question — record their TG message as
+      // the "currently working" anchor so 👀 shows again until session_done.
+      // (Reaction goes on the ❓ message itself, since there's no fresh user
+      // message in a callback. We use a separate key from chat reactions.)
       return json(200, { ok: true, delivered, choice });
     }
     // s:<sessionId>:<action>  — anchor button taps or picker selections
@@ -719,6 +810,14 @@ export class UserDO implements DurableObject {
           type: 'new_session',
           prompt: '',
         });
+        if (ok) {
+          await this.tg
+            .sendMessage(body.chatId, '🦆 新员工已上岗。直接发消息派活。', {
+              parseMode: 'HTML',
+              silent: true,
+            })
+            .catch(() => undefined);
+        }
         return json(200, { ok: true, delivered: ok, kind: 'new-fresh' });
       }
       if (parts[1] === 'resume' && parts[2]) {
@@ -726,6 +825,14 @@ export class UserDO implements DurableObject {
           type: 'resume_session',
           idOrName: parts[2],
         });
+        if (ok) {
+          await this.tg
+            .sendMessage(body.chatId, '🦆 接上了。直接发消息继续。', {
+              parseMode: 'HTML',
+              silent: true,
+            })
+            .catch(() => undefined);
+        }
         return json(200, { ok: true, delivered: ok, kind: 'new-resume' });
       }
     }

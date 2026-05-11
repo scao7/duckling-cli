@@ -85,6 +85,25 @@ export class TgApi {
     await this.call<boolean>('answerCallbackQuery', body);
   }
 
+  /**
+   * Set a single emoji reaction on a message. Pass `null` to clear all
+   * reactions. Used as a "still working / done" signal so the user knows the
+   * daemon received their input — see UX rule about feedback latency.
+   */
+  async setMessageReaction(
+    chatId: string,
+    messageId: number,
+    emoji: string | null,
+  ): Promise<void> {
+    const body: Record<string, unknown> = {
+      chat_id: chatId,
+      message_id: messageId,
+      reaction: emoji === null ? [] : [{ type: 'emoji', emoji }],
+      is_big: false,
+    };
+    await this.call<boolean>('setMessageReaction', body);
+  }
+
   async setWebhook(url: string, secretToken?: string): Promise<void> {
     const body: Record<string, unknown> = {
       url,

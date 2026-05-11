@@ -267,6 +267,7 @@ async function handleFreeText(update: TgUpdate, env: Env): Promise<void> {
       text: msg.text,
       fromUsername: msg.from?.username,
       chatId: String(msg.chat.id),
+      messageId: msg.message_id,
     }),
   });
 }

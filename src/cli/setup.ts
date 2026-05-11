@@ -106,18 +106,15 @@ export async function runSetup(): Promise<void> {
       '🔄 Daemon already running — restart it to pick up new credentials:\n   duckling stop && duckling start\n',
     );
   } else {
-    process.stdout.write('🚀 Starting daemon (spawns claude in a pty)...\n');
+    process.stdout.write('🚀 Starting daemon...\n');
     await runStart();
   }
 
   process.stdout.write(
     `\n✅ Paired. Daemon is up.\n\n` +
-      `Use claude:\n` +
-      `   duckling attach        # attach your terminal to the pty\n` +
-      `   (Ctrl+\\\\ to detach; daemon keeps claude alive in the background)\n\n` +
-      `From phone:\n` +
-      `   Just chat with @DucklingCli_Bot — what you type goes to claude,\n` +
-      `   what claude outputs comes back here. /sessions to list, /help for more.\n`,
+      `From your phone:\n` +
+      `   Chat with @DucklingCli_Bot. Send /new <task> to spawn a session.\n` +
+      `   /sessions lists what's running; /help for more.\n`,
   );
 }
 

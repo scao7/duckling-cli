@@ -68,22 +68,22 @@ export async function runDaemon(): Promise<void> {
       relay.send({ type: 'question', sessionId: s.id, toolUseId, questions });
       broadcastSnapshot();
     },
-    onComplete: (s, _finalText) => {
-      // Each successful `result` marks the end of a turn. We only push a
-      // summary footer when the turn actually did work — invoked a tool,
-      // produced a plan, or asked a question. Pure conversational replies
-      // (Claude says "OK" with no side effect) get NO footer so the chat
-      // stays quiet for chit-chat.
-      if (s.currentTurnDidWork) {
-        relay.send({
-          type: 'session_done',
-          sessionId: s.id,
-          status: 'completed',
-          costUsd: s.costUsd,
-          durationMs: Date.now() - s.startedAt,
-          numTurns: s.numTurns,
-        });
-      }
+    onComplete: (s, finalText) => {
+      // Always emit session_done so the worker can decide how to render:
+      //  - didWork=true  → summary footer ("✅ name · time · cost")
+      //  - didWork=false → render finalText as a plain chat reply
+      // The 4-message policy still holds — the worker drops the event when
+      // there's literally nothing to show (no work AND no text).
+      relay.send({
+        type: 'session_done',
+        sessionId: s.id,
+        status: 'completed',
+        costUsd: s.costUsd,
+        durationMs: Date.now() - s.startedAt,
+        numTurns: s.numTurns,
+        finalText,
+        didWork: s.currentTurnDidWork,
+      });
       broadcastSnapshot();
       log.info(
         `session ${s.id} task ended (cost=$${s.costUsd.toFixed(4)}, turns=${s.numTurns}, didWork=${s.currentTurnDidWork})`,
@@ -148,7 +148,7 @@ export async function runDaemon(): Promise<void> {
         const existing = manager.resolve(msg.idOrName);
         if (existing && existing.claudeSessionId) {
           manager.spawn({
-            prompt: '(resumed)',
+            prompt: '',  // empty: session loads, waits for user's first chat to become the task
             resumeClaudeSessionId: existing.claudeSessionId,
             forkSession: msg.fork === true,
             name: existing.name,
@@ -156,13 +156,16 @@ export async function runDaemon(): Promise<void> {
             model: existing.model,
           });
         } else if (/^[A-Za-z0-9_-]{8,64}$/.test(msg.idOrName)) {
-          // No record matches — treat the argument as a raw Claude session id
-          // (covers cross-daemon resume). Strict regex guards against path
-          // characters slipping into the SDK's resume option.
+          // No in-memory record — this happens when the user picks a session
+          // straight off disk via /new's picker. Pass the daemon's userCwd
+          // so the SDK looks up the jsonl in `~/.claude/projects/<cwd>/`;
+          // without cwd the SDK falls back to the daemon's process cwd
+          // (nvm bin dir) and emits "No conversation found".
           manager.spawn({
-            prompt: '(resumed)',
+            prompt: '',  // empty: session loads, waits for user's first chat to become the task
             resumeClaudeSessionId: msg.idOrName,
             forkSession: msg.fork === true,
+            cwd: userCwd,
           });
         } else {
           log.warn(`resume: nothing matches ${msg.idOrName} and id is malformed`);
