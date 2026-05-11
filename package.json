@@ -1,8 +1,27 @@
 {
-  "name": "duckling",
-  "version": "0.1.0",
-  "description": "A lightweight notifier and approval tool for Claude Code via Telegram.",
+  "name": "duckling-cli",
+  "version": "0.3.0",
+  "description": "Drive Claude Code from Telegram. Run the Claude Agent SDK as a daemon; chat with it from anywhere.",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "anthropic",
+    "telegram",
+    "agent",
+    "sdk",
+    "remote",
+    "mobile",
+    "ai"
+  ],
   "license": "MIT",
+  "homepage": "https://github.com/scao7/duckling-cli",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/scao7/duckling-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/scao7/duckling-cli/issues"
+  },
   "bin": {
     "duckling": "dist/cli/index.js"
   },

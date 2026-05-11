@@ -1,6 +1,6 @@
 # Deploying the duckling relay (Cloudflare Worker)
 
-You only need to do this **once**, as the project maintainer. End users `npm install -g duckling` and pair against your deployment.
+You only need to do this **once**, as the project maintainer. End users `npm install -g duckling-cli` and pair against your deployment.
 
 ## Prerequisites
 
